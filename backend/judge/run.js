@@ -2,88 +2,79 @@ import fs from "fs";
 import { judgeQuestions } from "../questionsJudgeData.js";
 import { execCmd } from "./exec.js";
 import { wrapJS } from "./wrappers/js.js";
-import { wrapPy } from "./wrappers/py.js";
-import { wrapCpp } from "./wrappers/cpp.js";
-import { wrapJava } from "./wrappers/java.js";
 
 export default async function run(req, res) {
-  const { language, code, questionId } = req.body;
-
-  if (!questionId) {
-    return res.json({ ok: false, message: "questionId missing" });
-  }
-
-  // ✅ USE JUDGE DATA (OBJECT)
-  const q = judgeQuestions[questionId];
-
-  if (!q || !Array.isArray(q.testcases) || q.testcases.length === 0) {
-    return res.json({
-      ok: false,
-      message: "Question not judge-enabled",
-    });
-  }
-
-  const tc = q.testcases[0];
-  let cmd;
-
   try {
-    if (language === "javascript") {
-      fs.writeFileSync("temp.js", wrapJS(code, tc.input));
-      cmd = "node temp.js";
+    const { language, code, questionId } = req.body;
 
-    } else if (language === "python") {
-      fs.writeFileSync("temp.py", wrapPy(code, tc.input));
-      cmd = "python temp.py";
-
-    } else if (language === "cpp") {
-      fs.writeFileSync("temp.cpp", wrapCpp(code, tc.input));
-      const exe = process.platform === "win32" ? "temp.exe" : "temp";
-      const runExe = process.platform === "win32" ? "temp.exe" : "./temp";
-      cmd = `g++ temp.cpp -o ${exe} && ${runExe}`;
-
-    } else if (language === "java") {
-      fs.writeFileSync("Main.java", wrapJava(code, tc.input));
-      cmd = "javac Main.java && java Main";
-
-    } else {
-      return res.json({ ok: false, message: "Unsupported language" });
-    }
-
-    const r = await execCmd(cmd);
-
-    // 🚫 cleanup COMMENTED for debugging
-    cleanup();
-
-    if (!r.ok) {
+    /* ---------- BASIC VALIDATION ---------- */
+    if (!language || !code) {
       return res.json({
         ok: false,
-        status: "compile_or_runtime_error",
-        message: r.message,
+        message: "language or code missing",
       });
     }
 
-    return res.json({ ok: true, output: r.output });
+    if (!questionId) {
+      return res.json({
+        ok: false,
+        message: "questionId missing",
+      });
+    }
 
-  } catch (e) {
-    // 🚫 cleanup COMMENTED for debugging
-    // cleanup();
+    /* ---------- ONLY JS ALLOWED ON RENDER ---------- */
+    if (language !== "javascript") {
+      return res.json({
+        ok: false,
+        message:
+          "Only JavaScript is supported on cloud judge right now (C++ / Java / Python disabled)",
+      });
+    }
+
+    /* ---------- FETCH QUESTION ---------- */
+    const q = judgeQuestions[questionId];
+
+    if (!q || !Array.isArray(q.testcases) || q.testcases.length === 0) {
+      return res.json({
+        ok: false,
+        message: "Question not judge-enabled",
+      });
+    }
+
+    const tc = q.testcases[0];
+
+    /* ---------- WRITE TEMP FILE ---------- */
+    const FILE = "temp.js";
+    fs.writeFileSync(FILE, wrapJS(code, tc.input));
+
+    /* ---------- EXECUTE ---------- */
+    const result = await execCmd(`node ${FILE}`);
+
+    /* ---------- CLEANUP (SAFE) ---------- */
+    try {
+      if (fs.existsSync(FILE)) fs.unlinkSync(FILE);
+    } catch (_) {
+      // ignore cleanup errors on Render
+    }
+
+    if (!result.ok) {
+      return res.json({
+        ok: false,
+        status: "runtime_error",
+        message: result.message || "Execution failed",
+      });
+    }
 
     return res.json({
+      ok: true,
+      output: result.output,
+    });
+  } catch (err) {
+    console.error("🔥 RUN ERROR:", err);
+
+    return res.status(500).json({
       ok: false,
-      message: e.message || "Unknown error",
+      message: "Internal judge error",
     });
   }
-}
-
-// ---------------- CLEANUP (DISABLED TEMPORARILY) ----------------
-function cleanup() {
-  [
-    "temp.js",
-    "temp.py",
-    "temp.cpp",
-    "temp",
-    "temp.exe",
-    "Main.java",
-    "Main.class",
-  ].forEach((f) => fs.existsSync(f) && fs.unlinkSync(f));
 }
