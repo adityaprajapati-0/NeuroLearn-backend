@@ -2,62 +2,52 @@ import fs from "fs";
 import { judgeQuestions } from "../questionsJudgeData.js";
 import { execCmd } from "./exec.js";
 import { wrapJS } from "./wrappers/js.js";
-import { wrapPy } from "./wrappers/py.js";
-import { wrapCpp } from "./wrappers/cpp.js";
-import { wrapJava } from "./wrappers/java.js";
 
 export default async function submit(req, res) {
-  const { language, code, questionId } = req.body;
-
-  if (!questionId) {
-    return res.json({ ok: false, message: "questionId missing in request" });
-  }
-
-  // ✅ USE JUDGE DATA (NOT FRONTEND QUESTIONS)
-  const q = judgeQuestions[questionId];
-
-  if (!q || !Array.isArray(q.testcases) || q.testcases.length === 0) {
-    return res.json({
-      ok: false,
-      message: "Question not judge-enabled",
-    });
-  }
-
   try {
-    // ---------------- RUN ALL TESTCASES ----------------
+    const { language, code, questionId } = req.body;
+
+    /* ---------- VALIDATION ---------- */
+    if (!questionId) {
+      return res.json({
+        ok: false,
+        message: "questionId missing in request",
+      });
+    }
+
+    if (language !== "javascript") {
+      return res.json({
+        ok: false,
+        message:
+          "Only JavaScript is supported on cloud judge right now",
+      });
+    }
+
+    const q = judgeQuestions[questionId];
+
+    if (!q || !Array.isArray(q.testcases) || q.testcases.length === 0) {
+      return res.json({
+        ok: false,
+        message: "Question not judge-enabled",
+      });
+    }
+
+    /* ---------- RUN ALL TESTCASES ---------- */
     for (const tc of q.testcases) {
-      let cmd;
+      const FILE = "temp.js";
+      fs.writeFileSync(FILE, wrapJS(code, tc.input));
 
-      if (language === "javascript") {
-        fs.writeFileSync("temp.js", wrapJS(code, tc.input));
-        cmd = "node temp.js";
+      const r = await execCmd(`node ${FILE}`);
 
-      } else if (language === "python") {
-        fs.writeFileSync("temp.py", wrapPy(code, tc.input));
-        cmd = "python temp.py";
-
-      } else if (language === "cpp") {
-        fs.writeFileSync("temp.cpp", wrapCpp(code, tc.input));
-        const exe = process.platform === "win32" ? "temp.exe" : "temp";
-        const runExe = process.platform === "win32" ? "temp.exe" : "./temp";
-        cmd = `g++ temp.cpp -o ${exe} && ${runExe}`;
-
-      } else if (language === "java") {
-        fs.writeFileSync("Main.java", wrapJava(code, tc.input));
-        cmd = "javac Main.java && java Main";
-
-      } else {
-        cleanup();
-        return res.json({ ok: false, message: "Unsupported language" });
-      }
-
-      const r = await execCmd(cmd);
-      cleanup();
+      // SAFE CLEANUP
+      try {
+        if (fs.existsSync(FILE)) fs.unlinkSync(FILE);
+      } catch {}
 
       if (!r.ok) {
         return res.json({
           ok: false,
-          status: "compile_or_runtime_error",
+          status: "runtime_error",
           message: r.message,
         });
       }
@@ -90,29 +80,17 @@ export default async function submit(req, res) {
       }
     }
 
+    /* ---------- ALL PASSED ---------- */
     return res.json({
       ok: true,
       status: "correct",
       passed: true,
     });
-
-  } catch (e) {
-    cleanup();
-    return res.json({
+  } catch (err) {
+    console.error("🔥 SUBMIT ERROR:", err);
+    return res.status(500).json({
       ok: false,
-      message: e.message || "Unknown judge error",
+      message: "Internal judge error",
     });
   }
-}
-
-function cleanup() {
-  [
-    "temp.js",
-    "temp.py",
-    "temp.cpp",
-    "temp",
-    "temp.exe",
-    "Main.java",
-    "Main.class",
-  ].forEach((f) => fs.existsSync(f) && fs.unlinkSync(f));
 }
