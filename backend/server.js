@@ -6,12 +6,26 @@ import submit from "./judge/submit.js";
 
 const app = express();
 
-app.use(cors());
+/* ---------- MIDDLEWARE ---------- */
+app.use(cors({ origin: "*" }));
 app.use(express.json());
 
+/* ---------- HEALTH / ROOT ---------- */
+app.get("/", (req, res) => {
+  res.send("🚀 NeuroLearn Judge Backend is running");
+});
+
+app.get("/health", (req, res) => {
+  res.json({ status: "ok" });
+});
+
+/* ---------- API ROUTES ---------- */
 app.post("/api/run", run);
 app.post("/api/submit", submit);
 
-app.listen(4000, () => {
-  console.log("🔥 Judge backend running on http://localhost:4000");
+/* ---------- PORT (RENDER SAFE) ---------- */
+const PORT = process.env.PORT || 4000;
+
+app.listen(PORT, () => {
+  console.log(`🔥 Judge backend running on port ${PORT}`);
 });
