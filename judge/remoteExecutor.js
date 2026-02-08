@@ -48,53 +48,6 @@ const toJavaObjectLiteral = (value) => {
 };
 
 const JAVA_RUNTIME_WRAPPER = `
-class __Runner {
-    static class Pair {
-        final Object k; final Object v;
-        Pair(Object k, Object v) { this.k = k; this.v = v; }
-    }
-    static Pair mapEntry(Object k, Object v) { return new Pair(k, v); }
-    @SafeVarargs static java.util.Map<Object, Object> mapOf(Pair... pairs) {
-        java.util.Map<Object, Object> m = new java.util.LinkedHashMap<>();
-        for (Pair p : pairs) m.put(p.k, p.v);
-        return m;
-    }
-    static java.lang.reflect.Method pickMethod(java.lang.reflect.Method[] methods, int argc) {
-        java.lang.reflect.Method best = null; int bestScore = Integer.MAX_VALUE;
-        for (java.lang.reflect.Method m : methods) {
-            if (m.getName().equals("main") || m.isSynthetic()) continue;
-            int pc = m.getParameterCount();
-            int score = Math.abs(pc - argc);
-            if (!m.getName().equals("solve")) score += 2;
-            if (!java.lang.reflect.Modifier.isStatic(m.getModifiers())) score += 1;
-            if (score < bestScore) { bestScore = score; best = m; }
-        }
-        return best;
-    }
-    static Object convert(Object raw, Class<?> targetType) {
-        if (raw == null) return targetType.isPrimitive() ? (targetType == boolean.class ? false : 0) : null;
-        if (targetType == String.class) return String.valueOf(raw);
-        if (targetType == int.class || targetType == Integer.class) return ((Number)raw).intValue();
-        if (targetType.isArray()) {
-            Object[] src = (Object[])raw;
-            Object arr = java.lang.reflect.Array.newInstance(targetType.getComponentType(), src.length);
-            for (int i=0; i<src.length; i++) java.lang.reflect.Array.set(arr, i, convert(src[i], targetType.getComponentType()));
-            return arr;
-        }
-        return raw;
-    }
-    static String toJson(Object v) {
-        if (v == null) return "null";
-        if (v instanceof String) return "\\"" + v.toString().replace("\\\"", "\\\\\\\"") + "\\"";
-        if (v instanceof Number || v instanceof Boolean) return String.valueOf(v);
-        if (v.getClass().isArray()) {
-            int n = java.lang.reflect.Array.getLength(v);
-            StringBuilder sb = new StringBuilder("[");
-            for (int i=0; i<n; i++) { if (i>0) sb.append(","); sb.append(toJson(java.lang.reflect.Array.get(v, i))); }
-            return sb.append("]").toString();
-        }
-        return String.valueOf(v);
-    }
     public static void main(String[] args) {
         try {
             Class<?> sol = Class.forName("Solution");
@@ -202,10 +155,79 @@ export async function executeRemote(code, language, input = null) {
       ? `new Object[]{${input.map((arg) => toJavaObjectLiteral(arg)).join(",")}}`
       : `new Object[]{${toJavaObjectLiteral(input)}}`;
 
-    if (!/class\s+Solution\b/.test(code)) {
-      finalCode = `class Solution {\n${code}\n}\n`;
+    let cleanCode = code.replace(/public\s+class/g, "class");
+    if (!/class\s+Solution\b/.test(cleanCode)) {
+      cleanCode = `class Solution {\n${cleanCode}\n}\n`;
     }
-    finalCode = `import java.util.*;\n${finalCode}\n${JAVA_RUNTIME_WRAPPER.replace("__ARGS_PLACEHOLDER__", argsLiteral)}`;
+
+    finalCode = `
+import java.util.*;
+import java.lang.reflect.*;
+
+${cleanCode}
+
+public class Main {
+    static class Pair {
+        final Object k; final Object v;
+        Pair(Object k, Object v) { this.k = k; this.v = v; }
+    }
+    static Pair mapEntry(Object k, Object v) { return new Pair(k, v); }
+    @SafeVarargs static java.util.Map<Object, Object> mapOf(Pair... pairs) {
+        java.util.Map<Object, Object> m = new java.util.LinkedHashMap<>();
+        for (Pair p : pairs) m.put(p.k, p.v);
+        return m;
+    }
+    static Method pickMethod(Method[] methods, int argc) {
+        Method best = null; int bestScore = Integer.MAX_VALUE;
+        for (Method m : methods) {
+            if (m.getName().equals("main") || m.isSynthetic()) continue;
+            int pc = m.getParameterCount();
+            int score = Math.abs(pc - argc);
+            if (!m.getName().equals("solve")) score += 2;
+            if (!Modifier.isStatic(m.getModifiers())) score += 1;
+            if (score < bestScore) { bestScore = score; best = m; }
+        }
+        return best;
+    }
+    static Object convert(Object raw, Class<?> targetType) {
+        if (raw == null) return targetType.isPrimitive() ? (targetType == boolean.class ? false : 0) : null;
+        if (targetType == String.class) return String.valueOf(raw);
+        if (targetType == int.class || targetType == Integer.class) return ((Number)raw).intValue();
+        if (targetType.isArray()) {
+            Object[] src = (Object[])raw;
+            Object arr = Array.newInstance(targetType.getComponentType(), src.length);
+            for (int i=0; i<src.length; i++) Array.set(arr, i, convert(src[i], targetType.getComponentType()));
+            return arr;
+        }
+        return raw;
+    }
+    static String toJson(Object v) {
+        if (v == null) return "null";
+        if (v instanceof String) return "\\"" + v.toString().replace("\\\"", "\\\\\\\"") + "\\"";
+        if (v instanceof Number || v instanceof Boolean) return String.valueOf(v);
+        if (v.getClass().isArray()) {
+            int n = Array.getLength(v);
+            StringBuilder sb = new StringBuilder("[");
+            for (int i=0; i<n; i++) { if (i>0) sb.append(","); sb.append(toJson(Array.get(v, i))); }
+            return sb.append("]").toString();
+        }
+        return String.valueOf(v);
+    }
+    public static void main(String[] args) {
+        try {
+            Class<?> sol = Class.forName("Solution");
+            Object[] rawArgs = ${argsLiteral};
+            Method m = pickMethod(sol.getDeclaredMethods(), rawArgs.length);
+            m.setAccessible(true);
+            Object target = Modifier.isStatic(m.getModifiers()) ? null : sol.getConstructor().newInstance();
+            Object[] finalArgs = new Object[m.getParameterCount()];
+            for(int i=0; i<finalArgs.length; i++) finalArgs[i] = convert(i<rawArgs.length ? rawArgs[i] : null, m.getParameterTypes()[i]);
+            Object res = m.invoke(target, finalArgs);
+            System.out.print("RESULT_START" + toJson(res) + "RESULT_END");
+        } catch (Throwable t) { t.printStackTrace(); System.exit(1); }
+    }
+}
+`;
   }
 
   // Robust C++ Wrapper
@@ -276,6 +298,14 @@ ${declarations}
         version: config.version,
         files: [
           {
+            name:
+              language === "java"
+                ? "Main.java"
+                : language === "cpp"
+                  ? "solution.cpp"
+                  : language === "python"
+                    ? "solution.py"
+                    : "solution",
             content: finalCode,
           },
         ],
