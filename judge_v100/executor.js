@@ -716,7 +716,7 @@ class __Runner {
 
     static String toJson(Object v) {
         if (v == null) return "null";
-        if (v instanceof String) return "\\"" + jsonEscape((String) v) + "\\"";
+        if (v instanceof String) return (char)34 + jsonEscape((String) v) + (char)34;
         if (v instanceof Number || v instanceof Boolean) return String.valueOf(v);
         Class<?> cls = v.getClass();
         if (cls.isArray()) {
