@@ -141,16 +141,54 @@ const inferCppType = (value) => {
   if (typeof value === "number")
     return Number.isInteger(value) ? "int" : "double";
   if (typeof value === "string") return "std::string";
-  if (Array.isArray(value)) return "std::vector<int>"; // Default assumption
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "std::vector<int>";
+    const inner = inferCppType(value[0]);
+    return `std::vector<${inner}>`;
+  }
   return "std::string";
 };
 
 const toCppValueExpr = (value, type) => {
+  if (type.startsWith("std::vector<")) {
+    const arr = Array.isArray(value) ? value : [];
+    const innerType = type.slice("std::vector<".length, -1).trim();
+    return `${type}{${arr.map((v) => toCppValueExpr(v, innerType)).join(", ")}}`;
+  }
   if (type === "std::string")
-    return `std::string("${String(value).replace(/"/g, '\\"')}")`;
+    return `std::string("${String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}")`;
   if (type === "bool") return value ? "true" : "false";
   return String(value);
 };
+
+const CPP_JSON_HELPERS = `
+string __jsonEscape(const string& s) {
+    string out; out.reserve(s.size() + 16);
+    for (char c : s) {
+        switch (c) {
+            case '\\\\': out += "\\\\\\\\"; break;
+            case '"': out += "\\\\\\""; break;
+            case '\\n': out += "\\\\n"; break;
+            case '\\r': out += "\\\\r"; break;
+            case '\\t': out += "\\\\t"; break;
+            default: out += c; break;
+        }
+    }
+    return out;
+}
+string __toJson(...) { return "null"; }
+string __toJson(const string& v) { return string("\\"") + __jsonEscape(v) + "\\""; }
+string __toJson(const char* v) { return string("\\"") + __jsonEscape(string(v ? v : "")) + "\\""; }
+string __toJson(bool v) { return v ? "true" : "false"; }
+template <typename T> typename enable_if<is_integral<T>::value && !is_same<T, bool>::value, string>::type
+__toJson(const T& v) { return to_string((long long)v); }
+template <typename T> typename enable_if<is_floating_point<T>::value, string>::type
+__toJson(const T& v) { ostringstream oss; oss << v; return oss.str(); }
+template <typename T> string __toJson(const vector<T>& v) {
+    string out = "["; for (size_t i = 0; i < v.size(); ++i) { if (i) out += ","; out += __toJson(v[i]); }
+    return out + "]";
+}
+`;
 
 export async function executeRemote(code, language, input = null) {
   const config = LANGUAGE_CONFIG[language];
@@ -190,16 +228,29 @@ export async function executeRemote(code, language, input = null) {
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <unordered_map>
+#include <map>
+#include <set>
+#include <unordered_set>
+#include <queue>
+#include <stack>
 #include <cmath>
+#include <type_traits>
+#include <sstream>
 using namespace std;
 
 ${code}
+
+${CPP_JSON_HELPERS}
 
 int main() {
     try {
 ${declarations}
         auto result = ${entry.name}(${callArgs});
-        cout << "RESULT_START" << result << "RESULT_END";
+        cout << "RESULT_START" << __toJson(result) << "RESULT_END";
+    } catch (const exception& e) {
+        cerr << e.what();
+        return 1;
     } catch (...) {
         return 1;
     }
