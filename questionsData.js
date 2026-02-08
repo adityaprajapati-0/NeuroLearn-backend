@@ -15,6 +15,13 @@ const baseQuestions = [
     topicFull: "Arrays / Hashing",
     title: "Two Sum",
     difficulty: "Easy",
+    templates: {
+      cpp: `#include <vector>\nusing namespace std;\n\nvector<int> solve(vector<int>& nums, int target) {\n    // Code here\n    return {};\n}`,
+      java: `import java.util.*;\nclass Solution {\n    public int[] solve(int[] nums, int target) {\n        return new int[]{};\n    }\n}`,
+      c: `#include <stdlib.h>\nint* solve(int* nums, int numsSize, int target) {\n    int* res = (int*)malloc(2*sizeof(int));\n    return res;\n}`,
+      javascript: `function solve(nums, target) {\n    return [];\n}`,
+      python: `def solve(nums, target):\n    return []`,
+    },
   },
   {
     topic: "Arrays",
@@ -132,6 +139,13 @@ const baseQuestions = [
     topicFull: "DFS / BFS",
     title: "Number of Islands",
     difficulty: "Medium",
+    templates: {
+      cpp: `#include <vector>\nusing namespace std;\n\nint solve(vector<vector<int>>& grid) {\n    // Code here\n    return 0;\n}`,
+      java: `class Solution {\n    public int solve(int[][] grid) {\n        return 0;\n    }\n}`,
+      c: `int solve(int** grid, int gridRowSize, int gridColSize) {\n    return 0;\n}`,
+      javascript: `function solve(grid) {\n    return 0;\n}`,
+      python: `def solve(grid):\n    return 0`,
+    },
   },
 ];
 
@@ -159,6 +173,7 @@ function buildQuestion(base, id) {
     constraints: override.constraints || [],
     examples: override.examples || [],
     testcases: override.testcases || [],
+    templates: { ...base.templates, ...override.templates },
 
     inputFormat: override.inputFormat || "",
     outputFormat: override.outputFormat || "",

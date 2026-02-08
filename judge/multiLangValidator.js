@@ -8,7 +8,21 @@ export async function validateMultiLang(code, language, testCases) {
   for (let i = 0; i < testCases.length; i++) {
     const { input, output: expected } = testCases[i];
     try {
-      const exec = await executeMultiLangEngine(code, language, input);
+      // Ensure input is an array for multi-arg support in C++/Java/C
+      // If input is an object {nums: [...], target: 9}, convert to values
+      // If input is single value, wrap in array
+      let normalizedInput = input;
+      if (input && typeof input === "object" && !Array.isArray(input)) {
+        normalizedInput = Object.values(input);
+      } else if (!Array.isArray(input)) {
+        normalizedInput = [input];
+      }
+
+      const exec = await executeMultiLangEngine(
+        code,
+        language,
+        normalizedInput,
+      );
       if (!exec.success) {
         results.push({ testCase: i + 1, passed: false, error: exec.error });
         continue;

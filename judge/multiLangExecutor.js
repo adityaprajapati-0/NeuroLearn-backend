@@ -115,10 +115,33 @@ async function runCpp(code, workDir, input, timeout) {
   const cppFile = path.join(workDir, "solution.cpp");
   const exeFile = path.join(workDir, "solution.exe");
   let finalCode = code;
+
+  // Simple wrapper if not using a custom main
   if (!code.includes("int main")) {
-    const inputStr = Array.isArray(input) ? input[0].join(",") : "";
-    finalCode += `\n#include <iostream>\n#include <vector>\nint main() {\n    std::vector<int> nums = {${inputStr}};\n    std::vector<int> res = solve(nums, ${Array.isArray(input) ? input[1] : 0});\n    std::cout << "[";\n    for(size_t i=0; i<res.size(); ++i) std::cout << res[i] << (i==res.size()-1 ? "" : ",");\n    std::cout << "]" << std::endl;\n    return 0;\n}`;
+    let inputDecls = "";
+    let callArgs = "";
+
+    if (Array.isArray(input)) {
+      input.forEach((arg, idx) => {
+        if (Array.isArray(arg)) {
+          // Detect if it's a 2D array
+          if (arg.length > 0 && Array.isArray(arg[0])) {
+            inputDecls += `std::vector<std::vector<int>> arg${idx} = {${arg.map((r) => `{${r.join(",")}}`).join(",")}};\n    `;
+          } else {
+            // Vector input (1D)
+            inputDecls += `std::vector<int> arg${idx} = {${arg.join(",")}};\n    `;
+          }
+        } else {
+          // Integer input
+          inputDecls += `int arg${idx} = ${arg};\n    `;
+        }
+        callArgs += (idx > 0 ? ", " : "") + `arg${idx}`;
+      });
+    }
+
+    finalCode += `\n#include <iostream>\n#include <vector>\nusing namespace std;\nint main() {\n    ${inputDecls}\n    auto res = solve(${callArgs});\n    cout << "[";\n    for(size_t i=0; i<res.size(); ++i) cout << res[i] << (i==res.size()-1 ? "" : ",");\n    cout << "]" << endl;\n    return 0;\n}`;
   }
+
   await fs.writeFile(cppFile, finalCode);
   try {
     await execPromise(`g++ "${cppFile}" -o "${exeFile}"`);
@@ -135,8 +158,24 @@ async function runJava(code, workDir, input, timeout) {
   if (!code.includes("public static void main")) {
     if (!code.includes("class Solution"))
       finalCode = `import java.util.*;\nclass Solution {\n${code}\n`;
-    const inputStr = Array.isArray(input) ? input[0].join(",") : "";
-    finalCode += `\n    public static void main(String[] args) {\n        int[] nums = {${inputStr}};\n        int[] res = solve(nums, ${Array.isArray(input) ? input[1] : 0});\n        System.out.print("[");\n        for(int i=0; i<res.length; i++) System.out.print(res[i] + (i==res.length-1 ? "" : ","));\n        System.out.println("]");\n    }\n}`;
+
+    let inputDecls = "";
+    let callArgs = "";
+
+    if (Array.isArray(input)) {
+      input.forEach((arg, idx) => {
+        if (Array.isArray(arg)) {
+          // Java Array input (assuming int[] for now based on Two Sum)
+          inputDecls += `int[] arg${idx} = {${arg.join(",")}};\n        `;
+        } else {
+          // Integer input
+          inputDecls += `int arg${idx} = ${arg};\n        `;
+        }
+        callArgs += (idx > 0 ? ", " : "") + `arg${idx}`;
+      });
+    }
+
+    finalCode += `\n    public static void main(String[] args) {\n        ${inputDecls}\n        int[] res = solve(${callArgs});\n        System.out.print("[");\n        for(int i=0; i<res.length; i++) System.out.print(res[i] + (i==res.length-1 ? "" : ","));\n        System.out.println("]");\n    }\n}`;
   }
   await fs.writeFile(javaFile, finalCode);
   try {
@@ -156,8 +195,45 @@ async function runC(code, workDir, input, timeout) {
   const exeFile = path.join(workDir, "solution.exe");
   let finalCode = code;
   if (!code.includes("int main")) {
-    const inputStr = Array.isArray(input) ? input[0].join(",") : "";
-    finalCode += `\n#include <stdio.h>\n#include <stdlib.h>\nint main() {\n    int nums[] = {${inputStr}};\n    int* res = solve(nums, ${Array.isArray(input) ? input[0].length : 0}, ${Array.isArray(input) ? input[1] : 0});\n    printf("[ %d, %d ]\\n", res[0], res[1]);\n    free(res); return 0;\n}`;
+    let inputDecls = "";
+    let callArgs = "";
+
+    if (Array.isArray(input)) {
+      input.forEach((arg, idx) => {
+        if (Array.isArray(arg)) {
+          // C Array input (assuming int[] for now)
+          inputDecls += `int arg${idx}[] = {${arg.join(",")}};\n    `;
+          // For C, we might need to pass size for arrays, but TwoSum usually implies explicit size or just pointer
+          // The original code passed `input[0].length` as the second argument which is array size.
+          // Let's assume standard Two Sum signature: int* twoSum(int* nums, int numsSize, int target, int* returnSize)
+          // But here the user error showed `solve(vector<int>&, int)`.
+          // For C, typical signature is `int* solve(int* nums, int numsSize, int target, int* returnSize)`
+          // The previous code did: `solve(nums, length, target)`
+          // We will try to match that pattern if an array is detected.
+        } else {
+          // Integer input
+          inputDecls += `int arg${idx} = ${arg};\n    `;
+        }
+      });
+
+      // Construct args for C specifically for LeetCode style C which often needs size
+      // If strict signature `int* solve(int* nums, int numsSize, int target, int* returnSize)`
+      // We might need to adjust. For now, let's replicate the dynamic approach but add size for arrays.
+      input.forEach((arg, idx) => {
+        if (Array.isArray(arg)) {
+          callArgs += (idx > 0 ? ", " : "") + `arg${idx}, ${arg.length}`;
+        } else {
+          callArgs += (idx > 0 ? ", " : "") + `arg${idx}`;
+        }
+      });
+    }
+
+    // Note: C return style is tricky (often out param or malloc).
+    // The original code assumed `int* res = solve(...)` and printed 2 elements.
+    // We will keep it simple and consistent with the previous logic but dynamic.
+
+    finalCode += `\n#include <stdio.h>\n#include <stdlib.h>\nint main() {\n    ${inputDecls}\n    int returnSize;\n    // Assuming signature: int* solve(int* nums, int numsSize, int target, int* returnSize)\n    // Or if simple: int* solve(int* nums, int numsSize, int target)\n    // The error log was C++, so C might be different. \n    // Let's stick to the previous pattern: solve(nums, size, target) based on old code.\n    
+    int* res = solve(${callArgs});\n    printf("[ %d, %d ]\\n", res[0], res[1]);\n    // free(res); // depends if callee mallocs\n    return 0;\n}`;
   }
   await fs.writeFile(cFile, finalCode);
   try {
