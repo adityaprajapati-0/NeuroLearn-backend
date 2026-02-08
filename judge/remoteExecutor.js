@@ -111,6 +111,47 @@ class __Runner {
 }
 `;
 
+// ---------------- C/C++ WRAPPER HELPERS ----------------
+const detectCStyleFunction = (code, preferredName = "solve") => {
+  const regex =
+    /(?:^|\n)\s*(?:static\s+|inline\s+|extern\s+|constexpr\s+)?([A-Za-z_][\w\s:*<>,\[\]&]*?)\s+([A-Za-z_]\w*)\s*\(([^()]*)\)\s*\{/g;
+  const blacklist = new Set(["if", "for", "while", "switch", "catch"]);
+  const found = [];
+  let match;
+  while ((match = regex.exec(code)) !== null) {
+    const returnType = String(match[1] || "").trim();
+    const name = String(match[2] || "").trim();
+    if (!name || blacklist.has(name) || name === "main") continue;
+    if (
+      !returnType ||
+      /^(if|for|while|switch|return|class|struct|enum|typedef|using)\b/.test(
+        returnType,
+      )
+    )
+      continue;
+    found.push({ name, returnType });
+  }
+  if (found.length === 0) return null;
+  return found.find((f) => f.name === preferredName) || found[0];
+};
+
+const inferCppType = (value) => {
+  if (value === null || value === undefined) return "int";
+  if (typeof value === "boolean") return "bool";
+  if (typeof value === "number")
+    return Number.isInteger(value) ? "int" : "double";
+  if (typeof value === "string") return "std::string";
+  if (Array.isArray(value)) return "std::vector<int>"; // Default assumption
+  return "std::string";
+};
+
+const toCppValueExpr = (value, type) => {
+  if (type === "std::string")
+    return `std::string("${String(value).replace(/"/g, '\\"')}")`;
+  if (type === "bool") return value ? "true" : "false";
+  return String(value);
+};
+
 export async function executeRemote(code, language, input = null) {
   const config = LANGUAGE_CONFIG[language];
   if (!config) throw new Error(`Language ${language} not supported by Piston.`);
@@ -129,9 +170,48 @@ export async function executeRemote(code, language, input = null) {
     finalCode = `import java.util.*;\n${finalCode}\n${JAVA_RUNTIME_WRAPPER.replace("__ARGS_PLACEHOLDER__", argsLiteral)}`;
   }
 
-  // Basic C++ main wrapper if solve() exists
+  // Robust C++ Wrapper
   if (language === "cpp" && !code.includes("int main")) {
-    finalCode = `#include <iostream>\n#include <vector>\n#include <string>\nusing namespace std;\n${code}\nint main() { /* Basic Piston entry workaround */ return 0; }`;
+    const entry = detectCStyleFunction(code, "solve");
+    if (entry) {
+      const args = Array.isArray(input)
+        ? input
+        : [input].filter((i) => i !== null && i !== undefined);
+      const declarations = args
+        .map((arg, i) => {
+          const type = inferCppType(arg);
+          return `    ${type} arg${i} = ${toCppValueExpr(arg, type)};`;
+        })
+        .join("\n");
+      const callArgs = args.map((_, i) => `arg${i}`).join(", ");
+
+      finalCode = `
+#include <iostream>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <cmath>
+using namespace std;
+
+${code}
+
+int main() {
+    try {
+${declarations}
+        auto result = ${entry.name}(${callArgs});
+        cout << "RESULT_START" << result << "RESULT_END";
+    } catch (...) {
+        return 1;
+    }
+    return 0;
+}
+`;
+    }
+  }
+
+  // Basic C Wrapper
+  if (language === "c" && !code.includes("int main")) {
+    finalCode = `#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n${code}\nint main() { return 0; }`;
   }
 
   try {
