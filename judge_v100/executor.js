@@ -8,10 +8,7 @@ import { executeRemote } from "../judge/remoteExecutor.js";
 const execPromise = promisify(exec);
 const TEMP_DIR = path.join(process.cwd(), "temp_exec");
 
-const USE_REMOTE_JUDGE = Boolean(
-  process.env.RAPID_API_KEY &&
-  process.env.RAPID_API_KEY !== "YOUR_REAL_RAPIDAPI_KEY",
-);
+const USE_REMOTE_JUDGE = true; // Always enable remote fallback for Java/C++ to avoid local dependency issues on Render
 
 async function ensureTempDir() {
   try {

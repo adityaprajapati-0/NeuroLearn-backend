@@ -1,105 +1,66 @@
 import fetch from "node-fetch";
 
-const JUDGE0_BASE_URL = "https://judge0-ce.p.rapidapi.com";
-
 /**
- * Mapping of internal language names to Judge0 Language IDs
- * Java (91), C++ (76), Python (92), C (75)
+ * Piston API - FREE & No Card Required
+ * Documentation: https://github.com/engineer-man/piston
  */
-const LANGUAGE_IDS = {
-  java: 91,
-  cpp: 76,
-  python: 92,
-  c: 75,
-  javascript: 93,
+const PISTON_URL = "https://emkc.org/api/v2/piston/execute";
+
+const LANGUAGE_CONFIG = {
+  java: { version: "15.0.2" },
+  cpp: { version: "10.2.0" },
+  python: { version: "3.10.0" },
+  c: { version: "10.2.0" },
+  javascript: { version: "18.15.0" },
 };
 
 export async function executeRemote(code, language, input = null) {
-  const apiKey = process.env.RAPID_API_KEY;
-  const apiHost = process.env.RAPID_API_HOST || "judge0-ce.p.rapidapi.com";
-
-  if (!apiKey || apiKey === "YOUR_REAL_RAPIDAPI_KEY") {
-    throw new Error("RapidAPI Key (Judge0) not configured on server.");
-  }
-
-  // Judge0 expects stdin for input. If it's a DSA problem, we might need to wrap it.
-  // For now, we assume the code is self-contained or stdin-ready.
-  const languageId = LANGUAGE_IDS[language];
-  if (!languageId)
-    throw new Error(`Language ${language} not supported by remote judge.`);
+  const config = LANGUAGE_CONFIG[language];
+  if (!config) throw new Error(`Language ${language} not supported by Piston.`);
 
   try {
-    // 1. Submit Code
-    const response = await fetch(
-      `${JUDGE0_BASE_URL}/submissions?base64_encoded=false&wait=false`,
-      {
-        method: "POST",
-        headers: {
-          "x-rapidapi-key": apiKey,
-          "x-rapidapi-host": apiHost,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          source_code: code,
-          language_id: languageId,
-          stdin: input
-            ? typeof input === "string"
-              ? input
-              : JSON.stringify(input)
-            : "",
-        }),
-      },
-    );
+    console.log(`🚀 Executing ${language} via Piston API...`);
 
-    const { token } = await response.json();
-    if (!token) throw new Error("Failed to get submission token from Judge0.");
-
-    // 2. Poll for Status
-    let result = null;
-    let attempts = 0;
-    const maxAttempts = 10;
-
-    while (attempts < maxAttempts) {
-      const pollRes = await fetch(
-        `${JUDGE0_BASE_URL}/submissions/${token}?base64_encoded=false`,
-        {
-          headers: {
-            "x-rapidapi-key": apiKey,
-            "x-rapidapi-host": apiHost,
+    const response = await fetch(PISTON_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        language: language,
+        version: config.version,
+        files: [
+          {
+            content: code,
           },
-        },
-      );
+        ],
+        stdin: input
+          ? typeof input === "string"
+            ? input
+            : JSON.stringify(input)
+          : "",
+      }),
+    });
 
-      result = await pollRes.json();
-      const statusId = result.status?.id;
+    const result = await response.json();
 
-      if (statusId !== 1 && statusId !== 2) {
-        // Status is no longer "In Queue" or "Processing"
-        break;
-      }
-
-      // Wait 1s before polling again
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      attempts++;
+    if (result.message) {
+      throw new Error(result.message);
     }
 
-    if (!result) throw new Error("Timed out waiting for Judge0 response.");
-
-    // 3. Return Standardized Object
-    const isSuccess = result.status?.id === 3; // "Accepted"
+    // Piston returns { run: { stdout, stderr, code, signal, output } }
+    const run = result.run;
+    const isSuccess = run.code === 0;
 
     return {
       success: isSuccess,
-      output: result.stdout || "",
+      output: run.stdout || "",
       error:
-        result.stderr ||
-        result.compile_output ||
-        result.status?.description ||
-        "Execution Error",
+        run.stderr ||
+        (run.code !== 0 ? `Execution failed with code ${run.code}` : ""),
       remote: true,
+      provider: "piston",
     };
   } catch (error) {
-    console.error("❌ Judge0 Remote Execution Error:", error);
+    console.error("❌ Piston Execution Error:", error);
     return {
       success: false,
       error: `Remote Judge Error: ${error.message}`,
