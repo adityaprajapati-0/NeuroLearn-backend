@@ -246,13 +246,13 @@ public class Main {
     }
     static String toJson(Object v) {
         if (v == null) return "null";
-        if (v instanceof String) return "\\\"" + v.toString().replace("\\\"", "\\\\\\\"") + "\\\"";
+        if (v instanceof String) return (char)34 + v.toString().replace(String.valueOf((char)34), (char)92 + "" + (char)34) + (char)34;
         if (v instanceof Number || v instanceof Boolean) return String.valueOf(v);
-        if (v instanceof Character) return "\\\"" + v.toString() + "\\\"";
+        if (v instanceof Character) return (char)34 + v.toString() + (char)34;
         if (v.getClass().isArray()) {
-            int n = Array.getLength(v);
+            int n = java.lang.reflect.Array.getLength(v);
             StringBuilder sb = new StringBuilder("[");
-            for (int i=0; i<n; i++) { if (i>0) sb.append(","); sb.append(toJson(Array.get(v, i))); }
+            for (int i=0; i<n; i++) { if (i>0) sb.append(","); sb.append(toJson(java.lang.reflect.Array.get(v, i))); }
             return sb.append("]").toString();
         }
         if (v instanceof java.util.Collection) return toJson(((java.util.Collection)v).toArray());
