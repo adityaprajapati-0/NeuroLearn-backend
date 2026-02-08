@@ -150,21 +150,31 @@ export async function executeRemote(code, language, input = null) {
   let finalCode = code;
 
   // Wrap Java if it doesn't have a main
-  if (language === "java" && !code.includes("public static void main")) {
-    const argsLiteral = Array.isArray(input)
-      ? `new Object[]{${input.map((arg) => toJavaObjectLiteral(arg)).join(",")}}`
-      : `new Object[]{${toJavaObjectLiteral(input)}}`;
+  const argsLiteral = Array.isArray(input)
+    ? `new Object[]{${input.map((arg) => toJavaObjectLiteral(arg)).join(",")}}`
+    : `new Object[]{${toJavaObjectLiteral(input)}}`;
 
-    let cleanCode = code.replace(/public\s+class/g, "class");
-    if (!/class\s+Solution\b/.test(cleanCode)) {
-      cleanCode = `class Solution {\n${cleanCode}\n}\n`;
-    }
+  // Extract imports and clean the code
+  let userImports = [];
+  let cleanCode = code.replace(/public\s+class/g, "class");
 
-    finalCode = `
+  // Find all top-level imports
+  const importRegex = /^\s*import\s+[^;]+;\s*$/gm;
+  let match;
+  while ((match = importRegex.exec(cleanCode)) !== null) {
+    userImports.push(match[0].trim());
+  }
+  // Remove imports from code body
+  cleanCode = cleanCode.replace(importRegex, "");
+
+  if (!/class\s+Solution\b/.test(cleanCode)) {
+    cleanCode = `class Solution {\n${cleanCode}\n}\n`;
+  }
+
+  finalCode = `
 import java.util.*;
 import java.lang.reflect.*;
-
-${cleanCode}
+${userImports.join("\n")}
 
 public class Main {
     static class Pair {
@@ -180,10 +190,11 @@ public class Main {
     static Method pickMethod(Method[] methods, int argc) {
         Method best = null; int bestScore = Integer.MAX_VALUE;
         for (Method m : methods) {
-            if (m.getName().equals("main") || m.isSynthetic()) continue;
+            String name = m.getName();
+            if (name.equals("main") || name.equals("wait") || name.equals("notify") || name.equals("notifyAll") || m.isSynthetic()) continue;
             int pc = m.getParameterCount();
             int score = Math.abs(pc - argc);
-            if (!m.getName().equals("solve")) score += 2;
+            if (!name.equals("solve")) score += 2;
             if (!Modifier.isStatic(m.getModifiers())) score += 1;
             if (score < bestScore) { bestScore = score; best = m; }
         }
@@ -194,6 +205,12 @@ public class Main {
         if (targetType == String.class) return String.valueOf(raw);
         if (targetType == int.class || targetType == Integer.class) return ((Number)raw).intValue();
         if (targetType.isArray()) {
+            if (!(raw instanceof Object[])) {
+                // Handle case where raw might be a single object but target is array
+                Object arr = Array.newInstance(targetType.getComponentType(), 1);
+                Array.set(arr, 0, convert(raw, targetType.getComponentType()));
+                return arr;
+            }
             Object[] src = (Object[])raw;
             Object arr = Array.newInstance(targetType.getComponentType(), src.length);
             for (int i=0; i<src.length; i++) Array.set(arr, i, convert(src[i], targetType.getComponentType()));
@@ -211,6 +228,9 @@ public class Main {
             for (int i=0; i<n; i++) { if (i>0) sb.append(","); sb.append(toJson(Array.get(v, i))); }
             return sb.append("]").toString();
         }
+        if (v instanceof java.util.Collection) {
+            return toJson(((java.util.Collection)v).toArray());
+        }
         return String.valueOf(v);
     }
     public static void main(String[] args) {
@@ -218,6 +238,7 @@ public class Main {
             Class<?> sol = Class.forName("Solution");
             Object[] rawArgs = ${argsLiteral};
             Method m = pickMethod(sol.getDeclaredMethods(), rawArgs.length);
+            if (m == null) { System.err.println("No suitable method found in Solution class."); System.exit(1); }
             m.setAccessible(true);
             Object target = Modifier.isStatic(m.getModifiers()) ? null : sol.getConstructor().newInstance();
             Object[] finalArgs = new Object[m.getParameterCount()];
@@ -227,8 +248,9 @@ public class Main {
         } catch (Throwable t) { t.printStackTrace(); System.exit(1); }
     }
 }
+
+${cleanCode}
 `;
-  }
 
   // Robust C++ Wrapper
   if (language === "cpp" && !code.includes("int main")) {
