@@ -201,36 +201,61 @@ public class Main {
         return best;
     }
     static Object convert(Object raw, Class<?> targetType) {
-        if (raw == null) return targetType.isPrimitive() ? (targetType == boolean.class ? false : 0) : null;
+        if (targetType == null) return raw;
+        if (raw == null) {
+            if (targetType.isPrimitive()) {
+                if (targetType == boolean.class) return false;
+                if (targetType == char.class) return '\0';
+                return 0;
+            }
+            return null;
+        }
+        
+        // Handle List/ArrayList
+        if (java.util.List.class.isAssignableFrom(targetType) || targetType == java.util.ArrayList.class) {
+            java.util.List<Object> list = new java.util.ArrayList<>();
+            if (raw instanceof Object[]) {
+                for (Object o : (Object[])raw) list.add(o);
+            } else {
+                list.add(raw);
+            }
+            return list;
+        }
+
         if (targetType == String.class) return String.valueOf(raw);
-        if (targetType == int.class || targetType == Integer.class) return ((Number)raw).intValue();
+        if (targetType == int.class || targetType == Integer.class) return (raw instanceof Number) ? ((Number)raw).intValue() : 0;
+        if (targetType == long.class || targetType == Long.class) return (raw instanceof Number) ? ((Number)raw).longValue() : 0L;
+        if (targetType == double.class || targetType == Double.class) return (raw instanceof Number) ? ((Number)raw).doubleValue() : 0.0d;
+        if (targetType == float.class || targetType == Float.class) return (raw instanceof Number) ? ((Number)raw).floatValue() : 0.0f;
+        if (targetType == boolean.class || targetType == Boolean.class) return (raw instanceof Boolean) ? (Boolean)raw : false;
+        if (targetType == char.class || targetType == Character.class) return String.valueOf(raw).length() > 0 ? String.valueOf(raw).charAt(0) : '\0';
+
         if (targetType.isArray()) {
+            Class<?> comp = targetType.getComponentType();
             if (!(raw instanceof Object[])) {
-                // Handle case where raw might be a single object but target is array
-                Object arr = Array.newInstance(targetType.getComponentType(), 1);
-                Array.set(arr, 0, convert(raw, targetType.getComponentType()));
+                Object arr = Array.newInstance(comp, 1);
+                Array.set(arr, 0, convert(raw, comp));
                 return arr;
             }
             Object[] src = (Object[])raw;
-            Object arr = Array.newInstance(targetType.getComponentType(), src.length);
-            for (int i=0; i<src.length; i++) Array.set(arr, i, convert(src[i], targetType.getComponentType()));
+            Object arr = Array.newInstance(comp, src.length);
+            for (int i=0; i<src.length; i++) Array.set(arr, i, convert(src[i], comp));
             return arr;
         }
         return raw;
     }
     static String toJson(Object v) {
         if (v == null) return "null";
-        if (v instanceof String) return "\\"" + v.toString().replace("\\\"", "\\\\\\\"") + "\\"";
+        if (v instanceof String) return "\"" + v.toString().replace("\"", "\\\"") + "\"";
         if (v instanceof Number || v instanceof Boolean) return String.valueOf(v);
+        if (v instanceof Character) return "\"" + v.toString() + "\"";
         if (v.getClass().isArray()) {
             int n = Array.getLength(v);
             StringBuilder sb = new StringBuilder("[");
             for (int i=0; i<n; i++) { if (i>0) sb.append(","); sb.append(toJson(Array.get(v, i))); }
             return sb.append("]").toString();
         }
-        if (v instanceof java.util.Collection) {
-            return toJson(((java.util.Collection)v).toArray());
-        }
+        if (v instanceof java.util.Collection) return toJson(((java.util.Collection)v).toArray());
         return String.valueOf(v);
     }
     public static void main(String[] args) {
@@ -242,10 +267,16 @@ public class Main {
             m.setAccessible(true);
             Object target = Modifier.isStatic(m.getModifiers()) ? null : sol.getConstructor().newInstance();
             Object[] finalArgs = new Object[m.getParameterCount()];
-            for(int i=0; i<finalArgs.length; i++) finalArgs[i] = convert(i<rawArgs.length ? rawArgs[i] : null, m.getParameterTypes()[i]);
+            for(int i=0; i<finalArgs.length; i++) {
+                finalArgs[i] = convert(i < rawArgs.length ? rawArgs[i] : null, m.getParameterTypes()[i]);
+            }
             Object res = m.invoke(target, finalArgs);
             System.out.print("RESULT_START" + toJson(res) + "RESULT_END");
-        } catch (Throwable t) { t.printStackTrace(); System.exit(1); }
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            e.getCause().printStackTrace(); System.exit(1);
+        } catch (Throwable t) {
+            t.printStackTrace(); System.exit(1);
+        }
     }
 }
 
