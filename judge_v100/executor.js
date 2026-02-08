@@ -3,9 +3,15 @@ import { promisify } from "util";
 import fs from "fs/promises";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
+import { executeRemote } from "../judge/remoteExecutor.js";
 
 const execPromise = promisify(exec);
 const TEMP_DIR = path.join(process.cwd(), "temp_exec");
+
+const USE_REMOTE_JUDGE = Boolean(
+  process.env.RAPID_API_KEY &&
+  process.env.RAPID_API_KEY !== "YOUR_REAL_RAPIDAPI_KEY",
+);
 
 async function ensureTempDir() {
   try {
@@ -32,7 +38,8 @@ function normalizeInputArgs(input) {
 
 function getJsFunctionCandidates(code) {
   const names = new Set();
-  const functionDecl = /(?:^|\n)\s*(?:async\s+)?function\s+([A-Za-z_]\w*)\s*\(/g;
+  const functionDecl =
+    /(?:^|\n)\s*(?:async\s+)?function\s+([A-Za-z_]\w*)\s*\(/g;
   const varFn =
     /(?:^|\n)\s*(?:const|let|var)\s+([A-Za-z_]\w*)\s*=\s*(?:async\s*)?(?:function\s*\(|\([^)]*\)\s*=>|[A-Za-z_]\w*\s*=>)/g;
 
@@ -122,8 +129,7 @@ function inferCppType(value) {
   if (Array.isArray(value)) {
     if (value.length === 0) return "std::vector<int>";
     const childTypes = [...new Set(value.map((v) => inferCppType(v)))];
-    const childType =
-      childTypes.length === 1 ? childTypes[0] : "std::string";
+    const childType = childTypes.length === 1 ? childTypes[0] : "std::string";
     return `std::vector<${childType}>`;
   }
   return "std::string";
@@ -177,6 +183,11 @@ export async function executeMultiLangEngine(
   timeout = 5000,
   expectedOutput = null,
 ) {
+  if (USE_REMOTE_JUDGE && ["java", "cpp", "c"].includes(language)) {
+    console.log(`📡 Using Remote Judge for ${language}`);
+    return await executeRemote(code, language, input);
+  }
+
   await ensureTempDir();
   const requestId = uuidv4();
   const workDir = path.join(TEMP_DIR, requestId);
@@ -785,10 +796,13 @@ class __Runner {
   await fs.writeFile(javaFile, finalCode);
   try {
     await execPromise(`javac "${javaFile}"`);
-    const { stdout, stderr } = await execPromise(`java -cp "${workDir}" __Runner`, {
-      timeout,
-      cwd: workDir,
-    });
+    const { stdout, stderr } = await execPromise(
+      `java -cp "${workDir}" __Runner`,
+      {
+        timeout,
+        cwd: workDir,
+      },
+    );
     const match = stdout.match(/RESULT_START(.*)RESULT_END/);
     let output = match ? match[1] : stdout.trim();
     return { success: true, output, error: stderr };
@@ -835,12 +849,18 @@ ${code}
       const argName = `arg${i}`;
 
       if (Array.isArray(value)) {
-        if (value.some((item) => Array.isArray(item) || typeof item === "object")) {
+        if (
+          value.some((item) => Array.isArray(item) || typeof item === "object")
+        ) {
           unsupportedInput = true;
           break;
         }
 
-        if (value.every((item) => typeof item === "number" || typeof item === "boolean")) {
+        if (
+          value.every(
+            (item) => typeof item === "number" || typeof item === "boolean",
+          )
+        ) {
           const isIntegral = value.every(
             (item) => typeof item === "boolean" || Number.isInteger(item),
           );
@@ -882,7 +902,9 @@ ${code}
       }
 
       if (typeof value === "string") {
-        declarations.push(`char ${argName}[] = "${escapeForDoubleQuotedString(value)}";`);
+        declarations.push(
+          `char ${argName}[] = "${escapeForDoubleQuotedString(value)}";`,
+        );
         callPieces.push({ plain: [argName], expanded: [argName] });
         continue;
       }

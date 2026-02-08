@@ -4,8 +4,15 @@ import fs from "fs/promises";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
 
+import { executeRemote } from "./remoteExecutor.js";
+
 const execPromise = promisify(exec);
 const TEMP_DIR = path.join(process.cwd(), "temp_exec");
+
+const USE_REMOTE_JUDGE = Boolean(
+  process.env.RAPID_API_KEY &&
+  process.env.RAPID_API_KEY !== "YOUR_REAL_RAPIDAPI_KEY",
+);
 
 async function ensureTempDir() {
   try {
@@ -21,6 +28,11 @@ export async function executeMultiLangEngine(
   input = null,
   timeout = 5000,
 ) {
+  if (USE_REMOTE_JUDGE && ["java", "cpp", "c"].includes(language)) {
+    console.log(`📡 Using Remote Judge for ${language}`);
+    return await executeRemote(code, language, input);
+  }
+
   await ensureTempDir();
   const requestId = uuidv4();
   const workDir = path.join(TEMP_DIR, requestId);
@@ -31,6 +43,7 @@ export async function executeMultiLangEngine(
       case "javascript":
         return await runNode(code, input, timeout);
       case "python":
+        // Render usually has Python, but we can fallback if needed.
         return await runPython(code, workDir, input, timeout);
       case "cpp":
         return await runCpp(code, workDir, input, timeout);
