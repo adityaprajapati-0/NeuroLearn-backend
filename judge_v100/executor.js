@@ -459,11 +459,11 @@ string __jsonEscape(const string& s) {
     out.reserve(s.size() + 16);
     for (char c : s) {
         switch (c) {
-            case '\\\\': out += "\\\\\\\\"; break;
-            case '"': out += "\\\\\\""; break;
-            case '\\n': out += "\\\\n"; break;
-            case '\\r': out += "\\\\r"; break;
-            case '\\t': out += "\\\\t"; break;
+            case '\\': out += "\\\\"; break;
+            case '"': out += "\\""; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
             default: out += c; break;
         }
     }
@@ -473,15 +473,15 @@ string __jsonEscape(const string& s) {
 string __toJson(...) { return "null"; }
 
 string __toJson(const string& v) {
-    return string("\\"") + __jsonEscape(v) + "\\"";
+    return string(1, 34) + __jsonEscape(v) + string(1, 34);
 }
 
 string __toJson(const char* v) {
-    return string("\"") + __jsonEscape(string(v ? v : "")) + "\"";
+    return string(1, 34) + __jsonEscape(string(v ? v : "")) + string(1, 34);
 }
 
 string __toJson(char* v) {
-    return string("\"") + __jsonEscape(string(v ? v : "")) + "\"";
+    return string(1, 34) + __jsonEscape(string(v ? v : "")) + string(1, 34);
 }
 
 string __toJson(bool v) {

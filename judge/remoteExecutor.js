@@ -161,8 +161,8 @@ string __jsonEscape(const string& s) {
     return out;
 }
 string __toJson(...) { return "null"; }
-string __toJson(const string& v) { return string("\"") + __jsonEscape(v) + "\""; }
-string __toJson(const char* v) { return string("\"") + __jsonEscape(string(v ? v : "")) + "\""; }
+string __toJson(const string& v) { return string(1, 34) + __jsonEscape(v) + string(1, 34); }
+string __toJson(const char* v) { return string(1, 34) + __jsonEscape(string(v ? v : "")) + string(1, 34); }
 string __toJson(bool v) { return v ? "true" : "false"; }
 template <typename T> typename enable_if<is_integral<T>::value && !is_same<T, bool>::value, string>::type
 __toJson(const T& v) { return to_string((long long)v); }
