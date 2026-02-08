@@ -1,0 +1,12 @@
+node_modules/
+.env
+*.log
+tutor_service/__pycache__/
+tutor_service/.env
+temp_exec/
+test_output.txt
+test_results.txt
+builder_log.txt
+final_report.txt
+final_verification.txt
+Solution.class
