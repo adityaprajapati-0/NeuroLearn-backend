@@ -142,7 +142,22 @@ const toCppValueExpr = (value, type) => {
   if (type === "std::string" || normalizeCppType(type) === "string")
     return `std::string("${String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}")`;
   if (type === "bool") return value ? "true" : "false";
-  return String(value);
+  if (type === "long long") {
+    const n = Number.isFinite(Number(value)) ? Number(value) : 0;
+    return `${Math.trunc(n)}LL`;
+  }
+  if (type === "double") {
+    const n = Number.isFinite(Number(value)) ? Number(value) : 0;
+    return `${n}`;
+  }
+  if (type === "int") {
+    const n = Number.isFinite(Number(value)) ? Number(value) : 0;
+    return `${Math.trunc(n)}`;
+  }
+  if (typeof value === "number") return `${value}`;
+
+  // Create a fallback for unknown types that is safer than raw string
+  return "0";
 };
 
 const CPP_JSON_HELPERS = `

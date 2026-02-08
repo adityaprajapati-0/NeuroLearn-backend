@@ -845,9 +845,16 @@ class __Runner {
                 throw new RuntimeException("No solve(...) method found in Solution class.");
             }
             method.setAccessible(true);
-            Object target = Modifier.isStatic(method.getModifiers())
-                ? null
-                : solutionClass.getDeclaredConstructor().newInstance();
+            Object target = null;
+            if (!Modifier.isStatic(method.getModifiers())) {
+                try {
+                    target = solutionClass.getDeclaredConstructor().newInstance();
+                } catch (NoSuchMethodException e) {
+                    throw new RuntimeException("Class 'Solution' must have a public no-argument constructor.");
+                } catch (Exception e) {
+                    throw new RuntimeException("Failed to instantiate 'Solution' class: " + e.getMessage());
+                }
+            }
             Object result = method.invoke(target, prepareArgs(method, rawArgs));
             System.out.print("RESULT_START" + toJson(result) + "RESULT_END");
         } catch (Throwable t) {
