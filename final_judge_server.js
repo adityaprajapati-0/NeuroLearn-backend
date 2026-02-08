@@ -9,8 +9,8 @@ import userRoutes from "./routes/userRoutes.js";
 import courseRoutes from "./routes/courseRoutes.js";
 import { query } from "./db.js";
 import aiHints from "./judge/aiHints.js";
-import { executeMultiLangEngine } from "./final_executor.js";
-import { validateMultiLang } from "./final_validator.js";
+import { executeMultiLangEngine } from "./judge_v100/executor.js";
+import { validateMultiLang } from "./judge_v100/validator.js";
 
 const app = express();
 const httpServer = createServer(app);
