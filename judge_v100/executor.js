@@ -138,18 +138,29 @@ function inferCppType(value) {
   return "std::string";
 }
 
-function getCppVectorInnerType(type) {
-  const prefix = "std::vector<";
-  if (!type.startsWith(prefix) || !type.endsWith(">")) return null;
-  return type.slice(prefix.length, -1).trim();
+function normalizeCppType(type) {
+  return type
+    .replace(/\bconst\b/g, "")
+    .replace(/[&*]/g, "")
+    .trim();
 }
 
-function toCppValueExpr(value, type = inferCppType(value)) {
+function getCppVectorInnerType(type) {
+  // Handle both vector<...> and std::vector<...>
+  // Also handle references/const by stripping them first
+  const normalized = normalizeCppType(type);
+  const match = normalized.match(/^(?:std::)?vector\s*<\s*(.*)\s*>$/);
+  return match ? match[1].trim() : null;
+}
+
+function toCppValueExpr(value, type) {
+  if (!type) type = inferCppType(value);
   const inner = getCppVectorInnerType(type);
-  if (inner) {
+  if (inner || Array.isArray(value)) {
     const arr = Array.isArray(value) ? value : [];
     const body = arr.map((v) => toCppValueExpr(v, inner)).join(", ");
-    return `${type}{${body}}`;
+    // If we have an inner type, use it for the constructor, else fallback to braced init
+    return (inner ? `std::vector<${inner}>` : "std::vector<int>") + `{${body}}`;
   }
 
   if (type === "std::string") {
@@ -431,9 +442,13 @@ ${code}
     const declarations = args
       .map((arg, i) => {
         // Use detected type if available, fallback to inference
-        const type = entry.params[i] ? entry.params[i].type : inferCppType(arg);
-        const valueExpr = toCppValueExpr(arg, type);
-        return `${type} arg${i} = ${valueExpr};`;
+        const rawType = entry.params[i]
+          ? entry.params[i].type
+          : inferCppType(arg);
+        // Important: declare variable as value type (no &) to allow braced init
+        const varType = normalizeCppType(rawType);
+        const valueExpr = toCppValueExpr(arg, rawType);
+        return `${varType} arg${i} = ${valueExpr};`;
       })
       .join("\n        ");
     const callArgs = args.map((_, i) => `arg${i}`).join(", ");

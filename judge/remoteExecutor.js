@@ -104,6 +104,19 @@ const detectCStyleFunction = (code, preferredName = "solve") => {
   return found.find((f) => f.name === preferredName) || found[0];
 };
 
+const normalizeCppType = (type) => {
+  return type
+    .replace(/\bconst\b/g, "")
+    .replace(/[&*]/g, "")
+    .trim();
+};
+
+const getCppVectorInnerType = (type) => {
+  const normalized = normalizeCppType(type);
+  const match = normalized.match(/^(?:std::)?vector\s*<\s*(.*)\s*>$/);
+  return match ? match[1].trim() : null;
+};
+
 const inferCppType = (value) => {
   if (value === null || value === undefined) return "int";
   if (typeof value === "boolean") return "bool";
@@ -119,12 +132,14 @@ const inferCppType = (value) => {
 };
 
 const toCppValueExpr = (value, type) => {
-  if (type.startsWith("std::vector<")) {
+  if (!type) type = inferCppType(value);
+  const inner = getCppVectorInnerType(type);
+  if (inner || Array.isArray(value)) {
     const arr = Array.isArray(value) ? value : [];
-    const innerType = type.slice("std::vector<".length, -1).trim();
-    return `${type}{${arr.map((v) => toCppValueExpr(v, innerType)).join(", ")}}`;
+    const body = arr.map((v) => toCppValueExpr(v, inner)).join(", ");
+    return (inner ? `std::vector<${inner}>` : "std::vector<int>") + `{${body}}`;
   }
-  if (type === "std::string")
+  if (type === "std::string" || normalizeCppType(type) === "string")
     return `std::string("${String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}")`;
   if (type === "bool") return value ? "true" : "false";
   return String(value);
@@ -360,10 +375,11 @@ ${cleanCode}
 
       const declarations = args
         .map((arg, i) => {
-          const type = entry.params[i]
+          const rawType = entry.params[i]
             ? entry.params[i].type
             : inferCppType(arg);
-          return `    ${type} arg${i} = ${toCppValueExpr(arg, type)};`;
+          const varType = normalizeCppType(rawType);
+          return `    ${varType} arg${i} = ${toCppValueExpr(arg, rawType)};`;
         })
         .join("\n");
       const callArgs = args.map((_, i) => `arg${i}`).join(", ");
