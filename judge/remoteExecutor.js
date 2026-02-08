@@ -74,6 +74,8 @@ const detectCStyleFunction = (code, preferredName = "solve") => {
   while ((match = regex.exec(code)) !== null) {
     const returnType = String(match[1] || "").trim();
     const name = String(match[2] || "").trim();
+    const paramsText = String(match[3] || "").trim();
+
     if (!name || blacklist.has(name) || name === "main") continue;
     if (
       !returnType ||
@@ -82,7 +84,21 @@ const detectCStyleFunction = (code, preferredName = "solve") => {
       )
     )
       continue;
-    found.push({ name, returnType });
+
+    const params =
+      paramsText === "void" || !paramsText
+        ? []
+        : paramsText.split(",").map((p) => {
+            const trimmed = p.trim();
+            const parts = trimmed.split(/\s+/);
+            const raw = parts[parts.length - 1];
+            const nameMatch = raw.match(/([A-Za-z_]\w*)$/);
+            const pName = nameMatch ? nameMatch[1] : "";
+            const pType = trimmed.replace(pName, "").trim();
+            return { type: pType, name: pName, raw: trimmed };
+          });
+
+    found.push({ name, returnType, params });
   }
   if (found.length === 0) return null;
   return found.find((f) => f.name === preferredName) || found[0];
@@ -130,8 +146,8 @@ string __jsonEscape(const string& s) {
     return out;
 }
 string __toJson(...) { return "null"; }
-string __toJson(const string& v) { return string("\\"") + __jsonEscape(v) + "\\""; }
-string __toJson(const char* v) { return string("\\"") + __jsonEscape(string(v ? v : "")) + "\\""; }
+string __toJson(const string& v) { return string("\"") + __jsonEscape(v) + "\""; }
+string __toJson(const char* v) { return string("\"") + __jsonEscape(string(v ? v : "")) + "\""; }
 string __toJson(bool v) { return v ? "true" : "false"; }
 template <typename T> typename enable_if<is_integral<T>::value && !is_same<T, bool>::value, string>::type
 __toJson(const T& v) { return to_string((long long)v); }
@@ -150,8 +166,41 @@ export async function executeRemote(code, language, input = null) {
   let finalCode = code;
 
   // Wrap Java if it doesn't have a main
-  const argsLiteral = Array.isArray(input)
-    ? `new Object[]{${input.map((arg) => toJavaObjectLiteral(arg)).join(",")}}`
+  let javaArgs = [];
+  if (language === "java") {
+    // Basic heuristics to find the likely method signature to help with object mapping
+    const javaMethodRegex =
+      /public\s+(?:static\s+)?[\w<>[\]]+\s+([A-Za-z_]\w*)\s*\(([^)]*)\)/;
+    const m = javaMethodRegex.exec(code);
+    const paramNames = m
+      ? m[2]
+          .split(",")
+          .map((p) => {
+            const parts = p.trim().split(/\s+/);
+            const raw = parts[parts.length - 1];
+            const nm = raw.match(/([A-Za-z_]\w*)$/);
+            return nm ? nm[1] : "";
+          })
+          .filter(Boolean)
+      : [];
+
+    if (Array.isArray(input)) {
+      javaArgs = input;
+    } else if (input && typeof input === "object") {
+      if (paramNames.length > 0) {
+        javaArgs = paramNames.map((n) =>
+          input[n] !== undefined ? input[n] : null,
+        );
+      } else {
+        javaArgs = [input];
+      }
+    } else if (input !== null && input !== undefined) {
+      javaArgs = [input];
+    }
+  }
+
+  const argsLiteral = Array.isArray(javaArgs)
+    ? `new Object[]{${javaArgs.map((arg) => toJavaObjectLiteral(arg)).join(",")}}`
     : `new Object[]{${toJavaObjectLiteral(input)}}`;
 
   // Extract imports and clean the code
@@ -287,12 +336,33 @@ ${cleanCode}
   if (language === "cpp" && !code.includes("int main")) {
     const entry = detectCStyleFunction(code, "solve");
     if (entry) {
-      const args = Array.isArray(input)
-        ? input
-        : [input].filter((i) => i !== null && i !== undefined);
+      // Intelligent C++ Args Selection & Object-to-Array Mapping
+      let args = [];
+      if (Array.isArray(input)) {
+        if (input.length === entry.params.length) {
+          args = input; // Perfect match
+        } else if (entry.params.length === 1) {
+          args = [input]; // Function takes 1 arg, which IS the array
+        } else {
+          args = input; // Fallback to raw array
+        }
+      } else if (input && typeof input === "object") {
+        args = entry.params.map((p) => {
+          if (input[p.name] !== undefined) return input[p.name];
+          const keys = Object.keys(input);
+          if (entry.params.length === 1 && keys.length === 1)
+            return input[keys[0]];
+          return null;
+        });
+      } else if (input !== null && input !== undefined) {
+        args = [input];
+      }
+
       const declarations = args
         .map((arg, i) => {
-          const type = inferCppType(arg);
+          const type = entry.params[i]
+            ? entry.params[i].type
+            : inferCppType(arg);
           return `    ${type} arg${i} = ${toCppValueExpr(arg, type)};`;
         })
         .join("\n");

@@ -96,12 +96,18 @@ function detectCStyleFunction(code, preferredName = "solve") {
     }
 
     const params =
-      !paramsText || paramsText === "void"
+      paramsText === "void" || !paramsText
         ? []
-        : paramsText
-            .split(",")
-            .map((p) => p.trim())
-            .filter(Boolean);
+        : paramsText.split(",").map((p) => {
+            const trimmed = p.trim();
+            const parts = trimmed.split(/\s+/);
+            const raw = parts[parts.length - 1];
+            // Extract identifier at the end (could be *name or &name)
+            const nameMatch = raw.match(/([A-Za-z_]\w*)$/);
+            const pName = nameMatch ? nameMatch[1] : "";
+            const pType = trimmed.replace(pName, "").trim();
+            return { type: pType, name: pName, raw: trimmed };
+          });
 
     found.push({ name, returnType, params });
   }
@@ -398,10 +404,34 @@ ${code}
       };
     }
 
-    const args = normalizeInputArgs(input);
+    // Intelligent C++ Args Selection & Object-to-Array Mapping
+    let args = [];
+    if (Array.isArray(input)) {
+      if (input.length === entry.params.length) {
+        args = input; // Perfect match
+      } else if (entry.params.length === 1) {
+        args = [input]; // Function takes 1 arg, which IS the array
+      } else {
+        args = input; // Fallback to raw array
+      }
+    } else if (input && typeof input === "object") {
+      // Map keys in input object to param names in the function signature
+      args = entry.params.map((p) => {
+        if (input[p.name] !== undefined) return input[p.name];
+        // Heuristic: if function has 1 param and object has 1 key, maybe it's that one
+        const keys = Object.keys(input);
+        if (entry.params.length === 1 && keys.length === 1)
+          return input[keys[0]];
+        return null;
+      });
+    } else if (input !== null && input !== undefined) {
+      args = [input];
+    }
+
     const declarations = args
       .map((arg, i) => {
-        const type = inferCppType(arg);
+        // Use detected type if available, fallback to inference
+        const type = entry.params[i] ? entry.params[i].type : inferCppType(arg);
         const valueExpr = toCppValueExpr(arg, type);
         return `${type} arg${i} = ${valueExpr};`;
       })
@@ -432,11 +462,11 @@ string __toJson(const string& v) {
 }
 
 string __toJson(const char* v) {
-    return string("\\"") + __jsonEscape(string(v ? v : "")) + "\\"";
+    return string("\"") + __jsonEscape(string(v ? v : "")) + "\"";
 }
 
 string __toJson(char* v) {
-    return string("\\"") + __jsonEscape(string(v ? v : "")) + "\\"";
+    return string("\"") + __jsonEscape(string(v ? v : "")) + "\"";
 }
 
 string __toJson(bool v) {
@@ -543,8 +573,41 @@ async function runJava(code, workDir, input, timeout) {
     return "null";
   };
 
-  const argsLiteral = Array.isArray(input)
-    ? `new Object[]{${input.map((arg) => toJavaObjectLiteral(arg)).join(",")}}`
+  // Wrap Java if it doesn't have a main
+  let javaArgs = [];
+  if (true) {
+    const javaMethodRegex =
+      /public\s+(?:static\s+)?[\w<>[\]]+\s+([A-Za-z_]\w*)\s*\(([^)]*)\)/;
+    const m = javaMethodRegex.exec(code);
+    const paramNames = m
+      ? m[2]
+          .split(",")
+          .map((p) => {
+            const parts = p.trim().split(/\s+/);
+            const raw = parts[parts.length - 1];
+            const nm = raw.match(/([A-Za-z_]\w*)$/);
+            return nm ? nm[1] : "";
+          })
+          .filter(Boolean)
+      : [];
+
+    if (Array.isArray(input)) {
+      javaArgs = input;
+    } else if (input && typeof input === "object") {
+      if (paramNames.length > 0) {
+        javaArgs = paramNames.map((n) =>
+          input[n] !== undefined ? input[n] : null,
+        );
+      } else {
+        javaArgs = [input];
+      }
+    } else if (input !== null && input !== undefined) {
+      javaArgs = [input];
+    }
+  }
+
+  const argsLiteral = Array.isArray(javaArgs)
+    ? `new Object[]{${javaArgs.map((arg) => toJavaObjectLiteral(arg)).join(",")}}`
     : `new Object[]{${toJavaObjectLiteral(input)}}`;
 
   if (!/class\s+Solution\b/.test(finalCode)) {
