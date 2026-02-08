@@ -246,9 +246,9 @@ public class Main {
     }
     static String toJson(Object v) {
         if (v == null) return "null";
-        if (v instanceof String) return "\"" + v.toString().replace("\"", "\\\"") + "\"";
+        if (v instanceof String) return "\\\"" + v.toString().replace("\\\"", "\\\\\\\"") + "\\\"";
         if (v instanceof Number || v instanceof Boolean) return String.valueOf(v);
-        if (v instanceof Character) return "\"" + v.toString() + "\"";
+        if (v instanceof Character) return "\\\"" + v.toString() + "\\\"";
         if (v.getClass().isArray()) {
             int n = Array.getLength(v);
             StringBuilder sb = new StringBuilder("[");
