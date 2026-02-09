@@ -537,7 +537,46 @@ ${declarations}
       for (let i = 0; i < args.length; i++) {
         const value = args[i];
         const argName = `arg${i}`;
-        if (Array.isArray(value)) {
+
+        // Check if this is a 2D array
+        const is2D =
+          Array.isArray(value) && value.length > 0 && Array.isArray(value[0]);
+
+        if (is2D) {
+          // Generate 2D array (int** or double**)
+          const allInts = value.every(
+            (row) =>
+              Array.isArray(row) &&
+              row.every((v) => typeof v === "boolean" || Number.isInteger(v)),
+          );
+          const type = allInts ? "int" : "double";
+
+          // Generate individual row arrays
+          value.forEach((row, rowIdx) => {
+            const rowLiterals = row
+              .map((v) => (typeof v === "boolean" ? (v ? 1 : 0) : v))
+              .join(",");
+            declarations.push(
+              `    ${type} ${argName}_row${rowIdx}[] = {${rowLiterals}};`,
+            );
+          });
+
+          // Generate array of pointers
+          const rowPtrs = value
+            .map((_, rowIdx) => `${argName}_row${rowIdx}`)
+            .join(", ");
+          declarations.push(`    ${type}* ${argName}[] = {${rowPtrs}};`);
+
+          // Generate dimension variables
+          declarations.push(`    int ${argName}_rows = ${value.length};`);
+          const colSize = value[0].length;
+          declarations.push(`    int ${argName}_cols = ${colSize};`);
+
+          // Pass matrix pointer and dimensions
+          callPieces.push(`${argName}, ${argName}_rows, ${argName}_cols`);
+          if (!firstArrayLenVar) firstArrayLenVar = `${argName}_rows`;
+        } else if (Array.isArray(value)) {
+          // 1D array
           const type = value.every(
             (v) => typeof v === "boolean" || Number.isInteger(v),
           )
