@@ -209,19 +209,7 @@ function toCppValueExpr(value, type, isTopLevel = true) {
 
   // If we have an array, we must use vector initialization
   if (Array.isArray(value)) {
-    // Determine the actual type to use for the top-level cast
-    // If we're at top level, we MUST ensure the type matches the data depth
     let finalType = type ? normalizeCppType(type) : inferCppType(value);
-
-    // If the data is 2D but the hint type is 1D (like vector<int>), trust the data
-    const dataInferred = inferCppType(value);
-    if (
-      isTopLevel &&
-      dataInferred.includes("vector<std::vector") &&
-      !finalType.includes("vector<std::vector")
-    ) {
-      finalType = dataInferred;
-    }
 
     const innerType = getCppVectorInnerType(finalType);
     const body = value
@@ -430,7 +418,10 @@ async function runCpp(code, workDir, input, timeout) {
   const inputFile = path.join(workDir, "input.json");
   await fs.writeFile(inputFile, JSON.stringify(input ?? null));
 
-  const hasMain = /\bint\s+main\s*\(/.test(code);
+  const hasMain =
+    /(?:^|\n)\s*(?:int|signed|auto|void|unsigned)\s+main\s*\([^)]*\)\s*\{?/.test(
+      code,
+    );
 
   let finalCode = `
 #include <iostream>
@@ -483,6 +474,14 @@ ${code}
       });
     } else if (input !== null && input !== undefined) {
       args = [input];
+    }
+
+    // ARITY PADDING: If we have fewer args than the signature expects, fill with nulls
+    // to avoid "too few arguments" compilation error.
+    if (entry && entry.params && args.length < entry.params.length) {
+      while (args.length < entry.params.length) {
+        args.push(null);
+      }
     }
 
     const declarations = args
@@ -945,7 +944,10 @@ async function runC(code, workDir, input, timeout, expectedOutput = null) {
   const exeFile = path.join(workDir, "solution.exe");
   const inputFile = path.join(workDir, "input.json");
   await fs.writeFile(inputFile, JSON.stringify(input ?? null));
-  const hasMain = /\bint\s+main\s*\(/.test(code);
+  const hasMain =
+    /(?:^|\n)\s*(int|signed|auto|void|unsigned)\s+main\s*\([^)]*\)\s*\{?/.test(
+      code,
+    );
 
   let finalCode = `
 #include <stdio.h>

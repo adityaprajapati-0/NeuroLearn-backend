@@ -72,10 +72,12 @@ int* solve(int* nums, int numsSize, int target) {
       code: `
 #include <vector>
 using namespace std;
-vector<int> solve(vector<vector<int>>& matrix) {
-    vector<int> res;
-    for(auto& r : matrix) for(int v : r) res.push_back(v);
-    return res;
+vector<vector<int>> solve(vector<vector<int>>& matrix) {
+    int m = matrix.size(), n = matrix[0].size();
+    vector<bool> rows(m, false), cols(n, false);
+    for(int i=0; i<m; i++) for(int j=0; j<n; j++) if(matrix[i][j] == 0) rows[i] = cols[j] = true;
+    for(int i=0; i<m; i++) for(int j=0; j<n; j++) if(rows[i] || cols[j]) matrix[i][j] = 0;
+    return matrix;
 }`,
       question: 7, // Let's use a virtual question ID for matrix test
     },
@@ -89,7 +91,7 @@ vector<int> solve(vector<vector<int>>& matrix) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           code: test.code,
-          questionId: 1,
+          questionId: test.question || 1,
           userId: "GUEST",
           language: test.lang,
         }),

@@ -133,6 +133,10 @@ const normalizeCppType = (type) => {
     .trim();
 };
 
+const normalizeCType = (type) => {
+  return normalizeCppType(type).replace(/std::vector\s*<\s*(.*?)\s*>/g, "$1*");
+};
+
 const getCppVectorInnerType = (type) => {
   const normalized = normalizeCppType(type);
   const match = normalized.match(/^(?:std::)?vector\s*<\s*(.*)\s*>$/);
@@ -164,16 +168,6 @@ const toCppValueExpr = (value, type, isTopLevel = true) => {
 
   if (Array.isArray(value)) {
     let finalType = type ? normalizeCppType(type) : inferCppType(value);
-    const dataInferred = inferCppType(value);
-
-    // Matrix safety: force vector<vector<...>> if data is 2D
-    if (
-      isTopLevel &&
-      dataInferred.includes("vector<std::vector") &&
-      !finalType.includes("vector<std::vector")
-    ) {
-      finalType = dataInferred;
-    }
 
     const innerType = getCppVectorInnerType(finalType);
     const body = value
@@ -433,7 +427,11 @@ ${cleanCode}
 `;
 
   // Robust C++ Wrapper
-  if (language === "cpp" && !code.includes("int main")) {
+  const hasMain =
+    /(?:^|\n)\s*(int|signed|auto|void|unsigned)\s+main\s*\([^)]*\)\s*\{?/.test(
+      code,
+    );
+  if (language === "cpp" && !hasMain) {
     const entry = detectCStyleFunction(code, "solve");
     if (entry) {
       // Intelligent C++ Args Selection & Object-to-Array Mapping
@@ -456,6 +454,13 @@ ${cleanCode}
         });
       } else if (input !== null && input !== undefined) {
         args = [input];
+      }
+
+      // ARITY PADDING: Ensure number of args matches signature to avoid "too few arguments"
+      if (entry && entry.params && args.length < entry.params.length) {
+        while (args.length < entry.params.length) {
+          args.push(null);
+        }
       }
 
       const declarations = args
@@ -519,37 +524,75 @@ ${declarations}
   if (language === "c" && !code.includes("int main")) {
     const entry = detectCStyleFunction(code, "solve");
     if (entry) {
-      let args = [];
-      if (Array.isArray(input)) args = input;
-      else if (input !== null && input !== undefined) args = [input];
+      const args = Array.isArray(input)
+        ? input
+        : [input].filter((x) => x !== null && x !== undefined);
+      const declarations = [];
+      const callPieces = [];
+      let firstArrayLenVar = null;
 
-      const declarations = args
-        .map((arg, i) => {
-          const inf = inferCppType(arg);
-          const varType = normalizeCppType(inf);
-          if (Array.isArray(arg)) {
-            return `    ${varType.replace("std::vector", "int*")} arg${i}; // Simplified for pointer`;
-          }
-          return `    ${varType} arg${i} = ${toCppValueExpr(arg, inf)};`;
-        })
-        .join("\n");
+      for (let i = 0; i < args.length; i++) {
+        const value = args[i];
+        const argName = `arg${i}`;
+        if (Array.isArray(value)) {
+          const type = value.every(
+            (v) => typeof v === "boolean" || Number.isInteger(v),
+          )
+            ? "int"
+            : "double";
+          const literals = value
+            .map((v) => (typeof v === "boolean" ? (v ? 1 : 0) : v))
+            .join(",");
+          declarations.push(`    ${type} ${argName}[] = {${literals}};`);
+          declarations.push(`    int ${argName}_len = ${value.length};`);
+          callPieces.push(`${argName}, ${argName}_len`);
+          if (!firstArrayLenVar) firstArrayLenVar = `${argName}_len`;
+        } else {
+          const type =
+            typeof value === "number"
+              ? Number.isInteger(value)
+                ? "int"
+                : "double"
+              : "int";
+          declarations.push(`    ${type} ${argName} = ${value};`);
+          callPieces.push(argName);
+        }
+      }
 
-      // Note: Full C pointer input handling is complex.
-      // For now, let's just make it work for Two Sum style (1D arrays).
+      const returnType = entry.returnType || "int";
+      const normalizedReturn = returnType.toLowerCase().replace(/\s+/g, "");
+      let printBlock = "";
+
+      if (normalizedReturn.includes("*")) {
+        const outLen = firstArrayLenVar || "2";
+        printBlock = `
+    if (__res == NULL) printf("null");
+    else {
+        printf("[");
+        for(int i=0; i<${outLen}; i++) {
+            if(i>0) printf(",");
+            printf("%g", (double)__res[i]);
+        }
+        printf("]");
+    }`;
+      } else {
+        printBlock = `printf("%g", (double)__res);`;
+      }
+
       finalCode = `
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 
 ${code}
 
 int main() {
-    ${declarations}
-    int __nums[] = {2, 7, 11, 15}; // Temporary hack for Two Sum verification
-    int* __result = solve(__nums, 4, 9);
-    printf("RESULT_START[");
-    if (__result) printf("%d,%d", __result[0], __result[1]);
-    printf("]RESULT_END");
+${declarations.join("\n")}
+    ${returnType} __res = ${entry.name}(${callPieces.join(", ")});
+    printf("RESULT_START");
+    ${printBlock}
+    printf("RESULT_END");
     return 0;
 }
 `;
