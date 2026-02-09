@@ -66,6 +66,7 @@ int* solve(int* nums, int numsSize, int target) {
     }
     return NULL;
 }`,
+    },
     {
       lang: "cpp",
       code: `
@@ -76,7 +77,7 @@ vector<int> solve(vector<vector<int>>& matrix) {
     for(auto& r : matrix) for(int v : r) res.push_back(v);
     return res;
 }`,
-      question: 7 // Let's use a virtual question ID for matrix test
+      question: 7, // Let's use a virtual question ID for matrix test
     },
   ];
 
