@@ -570,6 +570,8 @@ string __toJson(const pair<A, B>& v) {
 }
 
 int main() {
+    try {
+        ${declarations}
         auto result = ${entry.name}(${callArgs});
         std::cout << "RESULT_START" << __toJson(result) << "RESULT_END";
     } catch (const std::exception& e) {
