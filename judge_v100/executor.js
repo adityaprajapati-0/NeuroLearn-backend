@@ -41,7 +41,7 @@ function extractLastJson(text) {
   return trimmed;
 }
 
-const USE_REMOTE_JUDGE = false; // Set to false to use local gcc/javac and avoid outdated remote Render fallbacks
+const USE_REMOTE_JUDGE = true; // Enabled to handle missing local compilers (like javac) and offload execution
 
 async function ensureTempDir() {
   try {
@@ -1142,9 +1142,10 @@ ${code}
 int main() {
     ${declarations.join("\n    ")}
     ${callStatement}
-    printf("\nRESULT_START\n");
+    ${callStatement}
+    printf("\\nRESULT_START\\n");
     ${printBlock}
-    printf("\nRESULT_END\n");
+    printf("\\nRESULT_END\\n");
     fflush(stdout);
     return 0;
 }
