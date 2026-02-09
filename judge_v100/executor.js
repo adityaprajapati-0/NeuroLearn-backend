@@ -970,7 +970,6 @@ ${code}
           "No callable C function found. Define solve(...) or one top-level function.",
       };
     }
-
     const args = normalizeInputArgs(input);
     const declarations = [];
     const callPieces = [];

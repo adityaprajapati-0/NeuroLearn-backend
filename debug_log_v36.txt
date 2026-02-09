@@ -1,0 +1,37 @@
+---------------- DEBUG LOGS ----------------
+--------------------------------------------
+---------------- GENERATED C CODE ----------------
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <math.h>
+
+
+#include <stdio.h>
+// Signature matching LeetCode: grid, gridSize, gridColSize
+int solve(int** grid, int gridSize, int* gridColSize) {
+    if (gridSize == 0) return 0;
+    int sum = 0;
+    for(int i=0; i<gridSize; i++) {
+        for(int j=0; j<gridColSize[i]; j++) {
+            sum += grid[i][j];
+        }
+    }
+    return sum;
+}
+
+
+int main() {
+
+    int __res = solve(0, 0, 0);
+    
+    printf("RESULT_START");
+    printf("%g", (double)__res);
+    printf("RESULT_END");
+    
+    return 0;
+}
+
+--------------------------------------------------
