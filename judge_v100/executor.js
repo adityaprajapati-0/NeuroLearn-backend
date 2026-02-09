@@ -8,6 +8,39 @@ import { executeRemote } from "../judge/remoteExecutor.js";
 const execPromise = promisify(exec);
 const TEMP_DIR = path.join(process.cwd(), "temp_exec");
 
+/**
+ * Robustly extract the LAST valid JSON array or object from a string.
+ * This is immune to extra output or tag mangling.
+ */
+function extractLastJson(text) {
+  if (text === undefined || text === null) return "";
+  const startTag = "RESULT_START";
+  const endTag = "RESULT_END";
+
+  if (text.includes(startTag) && text.includes(endTag)) {
+    const start = text.lastIndexOf(startTag) + startTag.length;
+    const end = text.lastIndexOf(endTag);
+    return text.substring(start, end).trim();
+  }
+
+  const trimmed = text.trim();
+  const lastBracket = Math.max(
+    trimmed.lastIndexOf("]"),
+    trimmed.lastIndexOf("}"),
+  );
+  if (lastBracket === -1) return trimmed;
+
+  const firstBracket = Math.min(
+    trimmed.indexOf("[") === -1 ? Infinity : trimmed.indexOf("["),
+    trimmed.indexOf("{") === -1 ? Infinity : trimmed.indexOf("{"),
+  );
+
+  if (firstBracket !== Infinity && lastBracket > firstBracket) {
+    return trimmed.substring(firstBracket, lastBracket + 1);
+  }
+  return trimmed;
+}
+
 const USE_REMOTE_JUDGE = true; // Always enable remote fallback for Java/C++ to avoid local dependency issues on Render
 
 async function ensureTempDir() {
@@ -153,41 +186,27 @@ function getCppVectorInnerType(type) {
   return match ? match[1].trim() : null;
 }
 
-function toCppValueExpr(value, type) {
-  if (!type) type = inferCppType(value);
-  const inner = getCppVectorInnerType(type);
-  if (inner || Array.isArray(value)) {
-    const arr = Array.isArray(value) ? value : [];
-    const body = arr.map((v) => toCppValueExpr(v, inner)).join(", ");
-    // If we have an inner type, use it for the constructor, else fallback to braced init
-    return (inner ? `std::vector<${inner}>` : "std::vector<int>") + `{${body}}`;
+function toCppValueExpr(value, type, isTopLevel = true) {
+  if (value === null || value === undefined) return "0";
+  const innerType = getCppVectorInnerType(type);
+
+  if (Array.isArray(value)) {
+    const body = value
+      .map((v) => toCppValueExpr(v, innerType || inferCppType(v), false))
+      .join(", ");
+    if (isTopLevel) {
+      const explicitType = type ? normalizeCppType(type) : "std::vector<int>";
+      return `${explicitType}{${body}}`;
+    }
+    return `{${body}}`;
   }
 
-  if (type === "std::string") {
+  if (type === "std::string" || type === "string")
     return `std::string("${escapeForDoubleQuotedString(value)}")`;
-  }
-  if (type === "bool") {
-    return value ? "true" : "false";
-  }
-  if (type === "long long") {
-    const n = Number.isFinite(Number(value)) ? Number(value) : 0;
-    return `${Math.trunc(n)}LL`;
-  }
-  if (type === "double") {
-    const n = Number.isFinite(Number(value)) ? Number(value) : 0;
-    return `${n}`;
-  }
-  if (type === "int") {
-    const n = Number.isFinite(Number(value)) ? Number(value) : 0;
-    return `${Math.trunc(n)}`;
-  }
-
-  if (typeof value === "number") return `${value}`;
-  if (typeof value === "boolean") return value ? "true" : "false";
-  if (typeof value === "string") {
-    return `std::string("${escapeForDoubleQuotedString(value)}")`;
-  }
-  return "0";
+  if (type === "bool") return value ? "true" : "false";
+  if (type === "double" || type === "float") return `${value}`;
+  if (type === "long long") return `${value}LL`;
+  return `${value}`;
 }
 
 export async function executeMultiLangEngine(
@@ -355,10 +374,10 @@ if __name__ == "__main__":
 
         result = _invoke_entry(entry_fn, input_data)
              
-        sys.stdout.write("RESULT_START" + json.dumps({"result": result}) + "RESULT_END")
-    except Exception as e:
-        sys.stderr.write(str(e))
-        sys.exit(1)
+    sys.stdout.write("RESULT_START" + json.dumps(result) + "RESULT_END")
+  except Exception as e:
+    sys.stderr.write(str(e))
+    sys.exit(1)
 `;
   await fs.writeFile(pyFile, wrappedCode);
   try {
@@ -366,13 +385,7 @@ if __name__ == "__main__":
       timeout,
       cwd: workDir,
     });
-    const match = stdout.match(/RESULT_START(.*)RESULT_END/);
-    if (!match) throw new Error("Could not parse output: " + stdout);
-    return {
-      success: true,
-      output: JSON.parse(match[1]).result,
-      error: stderr,
-    };
+    return { success: true, output: extractLastJson(stdout), error: stderr };
   } catch (err) {
     return { success: false, error: err.stderr || err.message };
   }
@@ -487,15 +500,15 @@ string __toJson(bool v) {
 }
 
 template <typename T>
-typename enable_if<is_integral<T>::value && !is_same<T, bool>::value, string>::type
+typename std::enable_if<std::is_integral<T>::value && !std::is_same<T, bool>::value, std::string>::type
 __toJson(const T& v) {
-    return to_string((long long)v);
+    return std::to_string((long long)v);
 }
 
 template <typename T>
-typename enable_if<is_floating_point<T>::value, string>::type
+typename std::enable_if<std::is_floating_point<T>::value, std::string>::type
 __toJson(const T& v) {
-    ostringstream oss;
+    std::ostringstream oss;
     oss << v;
     return oss.str();
 }
@@ -520,12 +533,12 @@ int main() {
     try {
         ${declarations || ""}
         auto result = ${entry.name}(${callArgs});
-        cout << "RESULT_START" << __toJson(result) << "RESULT_END";
-    } catch (const exception& e) {
-        cerr << e.what();
+        std::cout << "RESULT_START" << __toJson(result) << "RESULT_END";
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << std::endl;
         return 1;
     } catch (...) {
-        cerr << "Runtime error";
+        std::cerr << "Unknown error" << std::endl;
         return 1;
     }
     return 0;
@@ -540,8 +553,7 @@ int main() {
       timeout,
       cwd: workDir,
     });
-    const match = stdout.match(/RESULT_START(.*)RESULT_END/);
-    let output = match ? match[1] : stdout.trim();
+    let output = extractLastJson(stdout);
     return { success: true, output, error: stderr };
   } catch (err) {
     return { success: false, error: err.stderr || err.message };
@@ -856,7 +868,10 @@ class __Runner {
                 }
             }
             Object result = method.invoke(target, prepareArgs(method, rawArgs));
-            System.out.print("RESULT_START" + toJson(result) + "RESULT_END");
+            System.out.println("\nRESULT_START");
+            System.out.println(toJson(result));
+            System.out.println("RESULT_END");
+            System.out.flush();
         } catch (Throwable t) {
             Throwable root = t;
             if (root instanceof java.lang.reflect.InvocationTargetException) {
@@ -876,16 +891,11 @@ class __Runner {
   await fs.writeFile(javaFile, finalCode);
   try {
     await execPromise(`javac "${javaFile}"`);
-    const { stdout, stderr } = await execPromise(
-      `java -cp "${workDir}" __Runner`,
-      {
-        timeout,
-        cwd: workDir,
-      },
-    );
-    const match = stdout.match(/RESULT_START(.*)RESULT_END/);
-    let output = match ? match[1] : stdout.trim();
-    return { success: true, output, error: stderr };
+    const { stdout, stderr } = await execPromise(`java -cp "${workDir}" Main`, {
+      timeout,
+      cwd: workDir,
+    });
+    return { success: true, output: extractLastJson(stdout), error: stderr };
   } catch (err) {
     return { success: false, error: err.stderr || err.message };
   }
@@ -1058,26 +1068,26 @@ ${code}
           : firstArrayLenVar || "2";
       printBlock = `
     if (__result == NULL) {
-        printf("RESULT_STARTnullRESULT_END\\n");
+        printf("null");
     } else {
         int __out_len = ${outLenExpr};
         if (__out_len < 0) __out_len = 0;
-        printf("RESULT_START[");
+        printf("[");
         for (int i = 0; i < __out_len; i++) {
             if (i) printf(",");
             printf("%g", (double)__result[i]);
         }
-        printf("]RESULT_END\\n");
+        printf("]");
     }`;
     } else if (/\bbool\b|_bool/.test(normalizedReturn)) {
-      printBlock = `printf("RESULT_START%sRESULT_END\\n", __result ? "true" : "false");`;
+      printBlock = `printf("%s", __result ? "true" : "false");`;
     } else if (
       /(unsigned|signed|int|long|short|size_t|char)/.test(normalizedReturn) &&
       !/(float|double)/.test(normalizedReturn)
     ) {
-      printBlock = `printf("RESULT_START%lldRESULT_END\\n", (long long)__result);`;
+      printBlock = `printf("%lld", (long long)__result);`;
     } else {
-      printBlock = `printf("RESULT_START%gRESULT_END\\n", (double)__result);`;
+      printBlock = `printf("%g", (double)__result);`;
     }
 
     const callStatement =
@@ -1089,7 +1099,10 @@ ${code}
 int main() {
     ${declarations.join("\n    ")}
     ${callStatement}
+    printf("\nRESULT_START\n");
     ${printBlock}
+    printf("\nRESULT_END\n");
+    fflush(stdout);
     return 0;
 }
 `;
@@ -1102,9 +1115,7 @@ int main() {
       timeout,
       cwd: workDir,
     });
-    const match = stdout.match(/RESULT_START(.*)RESULT_END/);
-    let output = match ? match[1] : stdout.trim();
-    return { success: true, output, error: stderr };
+    return { success: true, output: extractLastJson(stdout), error: stderr };
   } catch (err) {
     return { success: false, error: err.stderr || err.message };
   }

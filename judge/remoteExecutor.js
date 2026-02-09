@@ -131,13 +131,19 @@ const inferCppType = (value) => {
   return "std::string";
 };
 
-const toCppValueExpr = (value, type) => {
+const toCppValueExpr = (value, type, isTopLevel = true) => {
   if (!type) type = inferCppType(value);
   const inner = getCppVectorInnerType(type);
   if (inner || Array.isArray(value)) {
     const arr = Array.isArray(value) ? value : [];
-    const body = arr.map((v) => toCppValueExpr(v, inner)).join(", ");
-    return (inner ? `std::vector<${inner}>` : "std::vector<int>") + `{${body}}`;
+    const body = arr.map((v) => toCppValueExpr(v, inner, false)).join(", ");
+    if (isTopLevel) {
+      return (
+        (inner ? `std::vector<${inner}>` : "std::vector<int>") + `{${body}}`
+      );
+    } else {
+      return `{${body}}`;
+    }
   }
   if (type === "std::string" || normalizeCppType(type) === "string")
     return `std::string("${String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}")`;
@@ -187,11 +193,43 @@ template <typename T> string __toJson(const vector<T>& v) {
 }
 `;
 
+/**
+ * Robustly extract the LAST valid JSON array or object from a string.
+ */
+function extractLastJson(text) {
+  if (!text) return "";
+  const startTag = "RESULT_START";
+  const endTag = "RESULT_END";
+
+  if (text.includes(startTag) && text.includes(endTag)) {
+    const start = text.lastIndexOf(startTag) + startTag.length;
+    const end = text.lastIndexOf(endTag);
+    return text.substring(start, end).trim();
+  }
+
+  const trimmed = text.trim();
+  const lastBracket = Math.max(
+    trimmed.lastIndexOf("]"),
+    trimmed.lastIndexOf("}"),
+  );
+  const firstBracket = Math.min(
+    trimmed.indexOf("[") === -1 ? Infinity : trimmed.indexOf("["),
+    trimmed.indexOf("{") === -1 ? Infinity : trimmed.indexOf("{"),
+  );
+
+  if (firstBracket !== Infinity && lastBracket > firstBracket) {
+    return trimmed.substring(firstBracket, lastBracket + 1);
+  }
+  return trimmed;
+}
+
 export async function executeRemote(code, language, input = null) {
   const config = LANGUAGE_CONFIG[language];
   if (!config) throw new Error(`Language ${language} not supported by Piston.`);
 
   let finalCode = code;
+
+  // ... (rest of wrapping logic)
 
   // Wrap Java if it doesn't have a main
   let javaArgs = [];
@@ -481,7 +519,7 @@ ${declarations}
 
     return {
       success: isSuccess,
-      output: run.stdout || "",
+      output: extractLastJson(run.stdout),
       error:
         run.stderr ||
         (run.code !== 0 ? `Execution failed with code ${run.code}` : ""),

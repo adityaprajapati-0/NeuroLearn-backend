@@ -18,7 +18,6 @@ export async function validateMultiLang(code, language, testCases) {
         5000,
         expected,
       );
-
       if (!execution.success) {
         results.push({
           testCase: i + 1,
@@ -26,18 +25,17 @@ export async function validateMultiLang(code, language, testCases) {
           error: execution.error,
           input: JSON.stringify(input),
           expected: JSON.stringify(expected),
+          actual: null,
         });
         continue;
       }
 
       let actual = execution.output;
       if (typeof actual === "string") {
-        const trimmed = actual.trim();
         try {
-          actual = JSON.parse(trimmed);
+          actual = JSON.parse(actual.trim());
         } catch (e) {
-          // Keep as raw string when output is not JSON.
-          actual = trimmed;
+          actual = actual.trim();
         }
       }
 
@@ -50,6 +48,7 @@ export async function validateMultiLang(code, language, testCases) {
         input: JSON.stringify(input),
         expected: JSON.stringify(expected),
         actual: JSON.stringify(actual),
+        error: execution.error || null,
       });
     } catch (err) {
       results.push({
