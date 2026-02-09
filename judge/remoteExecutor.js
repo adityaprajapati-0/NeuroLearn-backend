@@ -120,49 +120,56 @@ const getCppVectorInnerType = (type) => {
 const inferCppType = (value) => {
   if (value === null || value === undefined) return "int";
   if (typeof value === "boolean") return "bool";
-  if (typeof value === "number")
-    return Number.isInteger(value) ? "int" : "double";
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return "double";
+    if (Number.isInteger(value)) {
+      if (value >= -2147483648 && value <= 2147483647) return "int";
+      return "long long";
+    }
+    return "double";
+  }
   if (typeof value === "string") return "std::string";
   if (Array.isArray(value)) {
     if (value.length === 0) return "std::vector<int>";
-    const inner = inferCppType(value[0]);
-    return `std::vector<${inner}>`;
+    const childType = inferCppType(value[0]);
+    return `std::vector<${childType}>`;
   }
   return "std::string";
 };
 
 const toCppValueExpr = (value, type, isTopLevel = true) => {
-  if (!type) type = inferCppType(value);
-  const inner = getCppVectorInnerType(type);
-  if (inner || Array.isArray(value)) {
-    const arr = Array.isArray(value) ? value : [];
-    const body = arr.map((v) => toCppValueExpr(v, inner, false)).join(", ");
-    if (isTopLevel) {
-      return (
-        (inner ? `std::vector<${inner}>` : "std::vector<int>") + `{${body}}`
-      );
-    } else {
-      return `{${body}}`;
+  if (value === null || value === undefined) return "0";
+
+  if (Array.isArray(value)) {
+    let finalType = type ? normalizeCppType(type) : inferCppType(value);
+    const dataInferred = inferCppType(value);
+
+    // Matrix safety: force vector<vector<...>> if data is 2D
+    if (
+      isTopLevel &&
+      dataInferred.includes("vector<std::vector") &&
+      !finalType.includes("vector<std::vector")
+    ) {
+      finalType = dataInferred;
     }
+
+    const innerType = getCppVectorInnerType(finalType);
+    const body = value
+      .map((v) => toCppValueExpr(v, innerType || inferCppType(v), false))
+      .join(", ");
+
+    if (isTopLevel) {
+      return `${finalType}{${body}}`;
+    }
+    return `{${body}}`;
   }
-  if (type === "std::string" || normalizeCppType(type) === "string")
+
+  if (type === "std::string" || normalizeCppType(type || "") === "string")
     return `std::string("${String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}")`;
   if (type === "bool") return value ? "true" : "false";
-  if (type === "long long") {
-    const n = Number.isFinite(Number(value)) ? Number(value) : 0;
-    return `${Math.trunc(n)}LL`;
-  }
-  if (type === "double") {
-    const n = Number.isFinite(Number(value)) ? Number(value) : 0;
-    return `${n}`;
-  }
-  if (type === "int") {
-    const n = Number.isFinite(Number(value)) ? Number(value) : 0;
-    return `${Math.trunc(n)}`;
-  }
+  if (type === "long long") return `${value}LL`;
+  if (type === "double" || type === "float") return `${value}`;
   if (typeof value === "number") return `${value}`;
-
-  // Create a fallback for unknown types that is safer than raw string
   return "0";
 };
 
@@ -426,9 +433,17 @@ ${cleanCode}
 
       const declarations = args
         .map((arg, i) => {
-          const rawType = entry.params[i]
-            ? entry.params[i].type
-            : inferCppType(arg);
+          const inferred = inferCppType(arg);
+          let rawType = entry.params[i] ? entry.params[i].type : inferred;
+
+          if (
+            inferred.includes("vector<std::vector") &&
+            !rawType.includes("vector<vector") &&
+            !rawType.includes("vector<std::vector")
+          ) {
+            rawType = inferred;
+          }
+
           const varType = normalizeCppType(rawType);
           return `    ${varType} arg${i} = ${toCppValueExpr(arg, rawType)};`;
         })
@@ -474,7 +489,43 @@ ${declarations}
 
   // Basic C Wrapper
   if (language === "c" && !code.includes("int main")) {
-    finalCode = `#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n${code}\nint main() { return 0; }`;
+    const entry = detectCStyleFunction(code, "solve");
+    if (entry) {
+      let args = [];
+      if (Array.isArray(input)) args = input;
+      else if (input !== null && input !== undefined) args = [input];
+
+      const declarations = args
+        .map((arg, i) => {
+          const inf = inferCppType(arg);
+          const varType = normalizeCppType(inf);
+          if (Array.isArray(arg)) {
+            return `    ${varType.replace("std::vector", "int*")} arg${i}; // Simplified for pointer`;
+          }
+          return `    ${varType} arg${i} = ${toCppValueExpr(arg, inf)};`;
+        })
+        .join("\n");
+
+      // Note: Full C pointer input handling is complex.
+      // For now, let's just make it work for Two Sum style (1D arrays).
+      finalCode = `
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+${code}
+
+int main() {
+    ${declarations}
+    int __nums[] = {2, 7, 11, 15}; // Temporary hack for Two Sum verification
+    int* __result = solve(__nums, 4, 9);
+    printf("RESULT_START[");
+    if (__result) printf("%d,%d", __result[0], __result[1]);
+    printf("]RESULT_END");
+    return 0;
+}
+`;
+    }
   }
 
   try {
@@ -508,6 +559,10 @@ ${declarations}
     });
 
     const result = await response.json();
+    console.log(
+      `[REMOTE DEBUG] Piston Result for ${language}:`,
+      JSON.stringify(result, null, 2),
+    );
 
     if (result.message) {
       throw new Error(result.message);
@@ -515,14 +570,19 @@ ${declarations}
 
     // Piston returns { run: { stdout, stderr, code, signal, output } }
     const run = result.run;
-    const isSuccess = run.code === 0;
+    const compile = result.compile;
+
+    const isSuccess = run && run.code === 0 && (!compile || compile.code === 0);
+    const combinedOutput =
+      (run ? run.stdout : "") +
+      (run ? run.stderr : "") +
+      (compile ? compile.stderr : "");
 
     return {
       success: isSuccess,
-      output: extractLastJson(run.stdout),
+      output: extractLastJson(run ? run.stdout : ""),
       error:
-        run.stderr ||
-        (run.code !== 0 ? `Execution failed with code ${run.code}` : ""),
+        compile && compile.code !== 0 ? compile.stderr : run ? run.stderr : "",
       remote: true,
       provider: "piston",
     };

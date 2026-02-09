@@ -164,8 +164,9 @@ function inferCppType(value) {
   if (typeof value === "string") return "std::string";
   if (Array.isArray(value)) {
     if (value.length === 0) return "std::vector<int>";
-    const childTypes = [...new Set(value.map((v) => inferCppType(v)))];
-    const childType = childTypes.length === 1 ? childTypes[0] : "std::string";
+    // Check if it's a nested array
+    const first = value[0];
+    const childType = inferCppType(first);
     return `std::vector<${childType}>`;
   }
   return "std::string";
@@ -188,25 +189,41 @@ function getCppVectorInnerType(type) {
 
 function toCppValueExpr(value, type, isTopLevel = true) {
   if (value === null || value === undefined) return "0";
-  const innerType = getCppVectorInnerType(type);
 
+  // If we have an array, we must use vector initialization
   if (Array.isArray(value)) {
+    // Determine the actual type to use for the top-level cast
+    // If we're at top level, we MUST ensure the type matches the data depth
+    let finalType = type ? normalizeCppType(type) : inferCppType(value);
+
+    // If the data is 2D but the hint type is 1D (like vector<int>), trust the data
+    const dataInferred = inferCppType(value);
+    if (
+      isTopLevel &&
+      dataInferred.includes("vector<std::vector") &&
+      !finalType.includes("vector<std::vector")
+    ) {
+      finalType = dataInferred;
+    }
+
+    const innerType = getCppVectorInnerType(finalType);
     const body = value
       .map((v) => toCppValueExpr(v, innerType || inferCppType(v), false))
       .join(", ");
+
     if (isTopLevel) {
-      const explicitType = type ? normalizeCppType(type) : "std::vector<int>";
-      return `${explicitType}{${body}}`;
+      return `${finalType}{${body}}`;
     }
     return `{${body}}`;
   }
 
-  if (type === "std::string" || type === "string")
+  if (type === "std::string" || normalizeCppType(type || "") === "string")
     return `std::string("${escapeForDoubleQuotedString(value)}")`;
   if (type === "bool") return value ? "true" : "false";
   if (type === "double" || type === "float") return `${value}`;
   if (type === "long long") return `${value}LL`;
-  return `${value}`;
+  if (typeof value === "number") return `${value}`;
+  return "0";
 }
 
 export async function executeMultiLangEngine(
@@ -373,11 +390,10 @@ if __name__ == "__main__":
             return fn(data)
 
         result = _invoke_entry(entry_fn, input_data)
-             
-    sys.stdout.write("RESULT_START" + json.dumps(result) + "RESULT_END")
-  except Exception as e:
-    sys.stderr.write(str(e))
-    sys.exit(1)
+        sys.stdout.write("RESULT_START" + json.dumps(result) + "RESULT_END")
+    except Exception as e:
+        sys.stderr.write(str(e))
+        sys.exit(1)
 `;
   await fs.writeFile(pyFile, wrappedCode);
   try {
@@ -454,16 +470,23 @@ ${code}
 
     const declarations = args
       .map((arg, i) => {
-        // Use detected type if available, fallback to inference
-        const rawType = entry.params[i]
-          ? entry.params[i].type
-          : inferCppType(arg);
-        // Important: declare variable as value type (no &) to allow braced init
+        const inferred = inferCppType(arg);
+        let rawType = entry.params[i] ? entry.params[i].type : inferred;
+
+        // If data is matrix, force vector<vector<...>> regardless of signature detection
+        if (
+          inferred.includes("vector<std::vector") &&
+          !rawType.includes("vector<vector") &&
+          !rawType.includes("vector<std::vector")
+        ) {
+          rawType = inferred;
+        }
+
         const varType = normalizeCppType(rawType);
         const valueExpr = toCppValueExpr(arg, rawType);
-        return `${varType} arg${i} = ${valueExpr};`;
+        return `    ${varType} arg${i} = ${valueExpr};`;
       })
-      .join("\n        ");
+      .join("\n");
     const callArgs = args.map((_, i) => `arg${i}`).join(", ");
 
     finalCode += `
@@ -530,15 +553,12 @@ string __toJson(const pair<A, B>& v) {
 }
 
 int main() {
-    try {
-        ${declarations || ""}
         auto result = ${entry.name}(${callArgs});
         std::cout << "RESULT_START" << __toJson(result) << "RESULT_END";
     } catch (const std::exception& e) {
-        std::cerr << e.what() << std::endl;
+        std::cerr << e.what();
         return 1;
     } catch (...) {
-        std::cerr << "Unknown error" << std::endl;
         return 1;
     }
     return 0;
@@ -553,8 +573,7 @@ int main() {
       timeout,
       cwd: workDir,
     });
-    let output = extractLastJson(stdout);
-    return { success: true, output, error: stderr };
+    return { success: true, output: extractLastJson(stdout), error: stderr };
   } catch (err) {
     return { success: false, error: err.stderr || err.message };
   }

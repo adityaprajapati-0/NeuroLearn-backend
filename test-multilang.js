@@ -66,6 +66,17 @@ int* solve(int* nums, int numsSize, int target) {
     }
     return NULL;
 }`,
+    {
+      lang: "cpp",
+      code: `
+#include <vector>
+using namespace std;
+vector<int> solve(vector<vector<int>>& matrix) {
+    vector<int> res;
+    for(auto& r : matrix) for(int v : r) res.push_back(v);
+    return res;
+}`,
+      question: 7 // Let's use a virtual question ID for matrix test
     },
   ];
 
