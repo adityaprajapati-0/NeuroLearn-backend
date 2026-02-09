@@ -54,7 +54,12 @@ const JAVA_RUNTIME_WRAPPER = `
             Object[] rawArgs = __ARGS_PLACEHOLDER__;
             java.lang.reflect.Method m = pickMethod(sol.getDeclaredMethods(), rawArgs.length);
             m.setAccessible(true);
-            Object target = java.lang.reflect.Modifier.isStatic(m.getModifiers()) ? null : sol.getConstructor().newInstance();
+            Object target = null;
+            if (!java.lang.reflect.Modifier.isStatic(m.getModifiers())) {
+                java.lang.reflect.Constructor<?> constr = sol.getDeclaredConstructor();
+                constr.setAccessible(true);
+                target = constr.newInstance();
+            }
             Object[] finalArgs = new Object[m.getParameterCount()];
             for(int i=0; i<finalArgs.length; i++) finalArgs[i] = convert(i<rawArgs.length ? rawArgs[i] : null, m.getParameterTypes()[i]);
             Object res = m.invoke(target, finalArgs);
@@ -88,7 +93,24 @@ const detectCStyleFunction = (code, preferredName = "solve") => {
     const params =
       paramsText === "void" || !paramsText
         ? []
-        : paramsText.split(",").map((p) => {
+        : (() => {
+            const result = [];
+            let current = "";
+            let depth = 0;
+            for (let i = 0; i < paramsText.length; i++) {
+              const char = paramsText[i];
+              if (char === "<") depth++;
+              else if (char === ">") depth--;
+              if (char === "," && depth === 0) {
+                result.push(current.trim());
+                current = "";
+              } else {
+                current += char;
+              }
+            }
+            if (current.trim()) result.push(current.trim());
+            return result;
+          })().map((p) => {
             const trimmed = p.trim();
             const parts = trimmed.split(/\s+/);
             const raw = parts[parts.length - 1];
@@ -387,7 +409,12 @@ public class Main {
             Method m = pickMethod(sol.getDeclaredMethods(), rawArgs.length);
             if (m == null) { System.err.println("No suitable method found in Solution class."); System.exit(1); }
             m.setAccessible(true);
-            Object target = Modifier.isStatic(m.getModifiers()) ? null : sol.getConstructor().newInstance();
+            Object target = null;
+            if (!Modifier.isStatic(m.getModifiers())) {
+                Constructor<?> constr = sol.getDeclaredConstructor();
+                constr.setAccessible(true);
+                target = constr.newInstance();
+            }
             Object[] finalArgs = new Object[m.getParameterCount()];
             for(int i=0; i<finalArgs.length; i++) {
                 finalArgs[i] = convert(i < rawArgs.length ? rawArgs[i] : null, m.getParameterTypes()[i]);
@@ -439,7 +466,8 @@ ${cleanCode}
           if (
             inferred.includes("vector<std::vector") &&
             !rawType.includes("vector<vector") &&
-            !rawType.includes("vector<std::vector")
+            !rawType.includes("vector<std::vector") &&
+            (entry.params.length === 1 || !entry.params[i])
           ) {
             rawType = inferred;
           }

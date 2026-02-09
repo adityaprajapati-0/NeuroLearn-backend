@@ -131,7 +131,24 @@ function detectCStyleFunction(code, preferredName = "solve") {
     const params =
       paramsText === "void" || !paramsText
         ? []
-        : paramsText.split(",").map((p) => {
+        : (() => {
+            const result = [];
+            let current = "";
+            let depth = 0;
+            for (let i = 0; i < paramsText.length; i++) {
+              const char = paramsText[i];
+              if (char === "<") depth++;
+              else if (char === ">") depth--;
+              if (char === "," && depth === 0) {
+                result.push(current.trim());
+                current = "";
+              } else {
+                current += char;
+              }
+            }
+            if (current.trim()) result.push(current.trim());
+            return result;
+          })().map((p) => {
             const trimmed = p.trim();
             const parts = trimmed.split(/\s+/);
             const raw = parts[parts.length - 1];
@@ -473,11 +490,12 @@ ${code}
         const inferred = inferCppType(arg);
         let rawType = entry.params[i] ? entry.params[i].type : inferred;
 
-        // If data is matrix, force vector<vector<...>> regardless of signature detection
+        // Matrix safety: only force vector<vector<...>> IF data is 2D and we have no arity match
         if (
           inferred.includes("vector<std::vector") &&
           !rawType.includes("vector<vector") &&
-          !rawType.includes("vector<std::vector")
+          !rawType.includes("vector<std::vector") &&
+          (entry.params.length === 1 || !entry.params[i])
         ) {
           rawType = inferred;
         }
@@ -877,11 +895,13 @@ class __Runner {
             }
             method.setAccessible(true);
             Object target = null;
-            if (!Modifier.isStatic(method.getModifiers())) {
+            if (!java.lang.reflect.Modifier.isStatic(method.getModifiers())) {
                 try {
-                    target = solutionClass.getDeclaredConstructor().newInstance();
+                    java.lang.reflect.Constructor<?> constr = solutionClass.getDeclaredConstructor();
+                    constr.setAccessible(true);
+                    target = constr.newInstance();
                 } catch (NoSuchMethodException e) {
-                    throw new RuntimeException("Class 'Solution' must have a public no-argument constructor.");
+                    throw new RuntimeException("Class 'Solution' must have a no-argument constructor (it can be private).");
                 } catch (Exception e) {
                     throw new RuntimeException("Failed to instantiate 'Solution' class: " + e.getMessage());
                 }
