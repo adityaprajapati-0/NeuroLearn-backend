@@ -41,7 +41,7 @@ function extractLastJson(text) {
   return trimmed;
 }
 
-const USE_REMOTE_JUDGE = true; // Always enable remote fallback for Java/C++ to avoid local dependency issues on Render
+const USE_REMOTE_JUDGE = false; // Set to false to use local gcc/javac and avoid outdated remote Render fallbacks
 
 async function ensureTempDir() {
   try {
