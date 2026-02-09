@@ -548,13 +548,15 @@ ${declarations}
           callPieces.push(`${argName}, ${argName}_len`);
           if (!firstArrayLenVar) firstArrayLenVar = `${argName}_len`;
         } else {
+          // Handle scalar values
+          const safeValue = value === null || value === undefined ? 0 : value;
           const type =
-            typeof value === "number"
-              ? Number.isInteger(value)
+            typeof safeValue === "number"
+              ? Number.isInteger(safeValue)
                 ? "int"
                 : "double"
               : "int";
-          declarations.push(`    ${type} ${argName} = ${value};`);
+          declarations.push(`    ${type} ${argName} = ${safeValue};`);
           callPieces.push(argName);
         }
       }
