@@ -468,7 +468,10 @@ ${cleanCode}
           const inferred = inferCppType(arg);
           let rawType = entry.params[i] ? entry.params[i].type : inferred;
 
-          if (
+          // For arrays, always prefer the inferred type to ensure correct dimensionality
+          if (Array.isArray(arg) && arg.length > 0) {
+            rawType = inferred;
+          } else if (
             inferred.includes("vector<std::vector") &&
             !rawType.includes("vector<vector") &&
             !rawType.includes("vector<std::vector") &&
