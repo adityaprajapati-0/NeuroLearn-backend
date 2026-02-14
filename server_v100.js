@@ -14,11 +14,13 @@ import { resolveQuestionCheck } from "./judge_v99/questionCheckTool.js";
 import userRoutes from "./routes/userRoutes.js";
 import courseRoutes from "./routes/courseRoutes.js";
 import tutorRoutes from "./routes/tutorRoutes.js";
+import chatRoutes from "./routes/chatRoutes.js";
+import aiRoutes from "./routes/aiRoutes.js";
 
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: "*", methods: ["GET", "POST"] },
+  cors: { origin: "*", methods: ["GET", "POST", "PATCH", "PUT", "DELETE"] },
 });
 
 app.use(compression());
@@ -26,13 +28,40 @@ app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
 app.use(express.json());
 
+// Attach io to request for routes to use
+app.use((req, res, next) => {
+  req.io = io;
+  next();
+});
+
 app.use("/api/users", userRoutes);
 app.use("/api/courses", courseRoutes);
 app.use("/api/tutor", tutorRoutes);
+app.use("/api/chats", chatRoutes);
+app.use("/api/ai", aiRoutes);
 
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
   next();
+});
+
+// Socket.IO Logic
+io.on("connection", (socket) => {
+  console.log(`🔌 Client connected: ${socket.id}`);
+
+  socket.on("join_room", (room) => {
+    socket.join(room);
+    console.log(`Socket ${socket.id} joined room ${room}`);
+  });
+
+  socket.on("leave_room", (room) => {
+    socket.leave(room);
+    console.log(`Socket ${socket.id} left room ${room}`);
+  });
+
+  socket.on("disconnect", () => {
+    console.log(`Client disconnected: ${socket.id}`);
+  });
 });
 
 async function markQuestionSolvedForUser(userId, questionId) {

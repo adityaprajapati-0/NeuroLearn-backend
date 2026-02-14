@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS courses (
   description TEXT,
   level VARCHAR(50),
   teacher_id VARCHAR(20) REFERENCES users(id),
-  is_approved BOOLEAN DEFAULT FALSE,
+  status VARCHAR(20) DEFAULT 'pending',
+  rejection_reason TEXT,
   content JSONB, -- Stores modules, quizzes, etc.
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -49,14 +50,26 @@ CREATE TABLE IF NOT EXISTS enrollments (
   UNIQUE(student_id, course_id)
 );
 
--- Table: chat_messages
-CREATE TABLE IF NOT EXISTS chat_messages (
+-- Table: chats
+CREATE TABLE IF NOT EXISTS chats (
   id SERIAL PRIMARY KEY,
-  course_id VARCHAR(20) REFERENCES courses(id),
-  sender_id VARCHAR(20) REFERENCES users(id),
-  sender_name VARCHAR(255),
-  message TEXT NOT NULL,
-  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  course_id VARCHAR(255) REFERENCES courses(id) ON DELETE CASCADE,
+  student_id VARCHAR(255) REFERENCES users(id) ON DELETE CASCADE,
+  teacher_id VARCHAR(255) REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(course_id, student_id, teacher_id)
+);
+
+-- Table: messages
+CREATE TABLE IF NOT EXISTS messages (
+  id SERIAL PRIMARY KEY,
+  chat_id INTEGER REFERENCES chats(id) ON DELETE CASCADE,
+  sender_id VARCHAR(255) REFERENCES users(id) ON DELETE CASCADE,
+  content TEXT,
+  media_url TEXT,
+  is_read BOOLEAN DEFAULT false,
+  created_at TIMESTAMP DEFAULT NOW()
 );
 
 -- Migrations for existing tables

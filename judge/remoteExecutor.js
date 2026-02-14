@@ -523,7 +523,7 @@ ${declarations}
     }
   }
 
-  // Basic C Wrapper
+  // Robust C Wrapper
   if (language === "c" && !code.includes("int main")) {
     const entry = detectCStyleFunction(code, "solve");
     if (entry) {
@@ -531,7 +531,7 @@ ${declarations}
         ? input
         : [input].filter((x) => x !== null && x !== undefined);
       const declarations = [];
-      const callPieces = [];
+      const argChoices = []; // Each element is an array of possible call piece arrays
       let firstArrayLenVar = null;
 
       for (let i = 0; i < args.length; i++) {
@@ -543,7 +543,6 @@ ${declarations}
           Array.isArray(value) && value.length > 0 && Array.isArray(value[0]);
 
         if (is2D) {
-          // Generate 2D array (int** or double**)
           const allInts = value.every(
             (row) =>
               Array.isArray(row) &&
@@ -551,7 +550,6 @@ ${declarations}
           );
           const type = allInts ? "int" : "double";
 
-          // Generate individual row arrays
           value.forEach((row, rowIdx) => {
             const rowLiterals = row
               .map((v) => (typeof v === "boolean" ? (v ? 1 : 0) : v))
@@ -561,22 +559,20 @@ ${declarations}
             );
           });
 
-          // Generate array of pointers
           const rowPtrs = value
             .map((_, rowIdx) => `${argName}_row${rowIdx}`)
             .join(", ");
           declarations.push(`    ${type}* ${argName}[] = {${rowPtrs}};`);
-
-          // Generate dimension variables
           declarations.push(`    int ${argName}_rows = ${value.length};`);
           const colSize = value[0].length;
           declarations.push(`    int ${argName}_cols = ${colSize};`);
 
-          // Pass matrix pointer and dimensions
-          callPieces.push(`${argName}, ${argName}_rows, ${argName}_cols`);
+          argChoices.push([
+            [argName],
+            [argName, `${argName}_rows`, `${argName}_cols`],
+          ]);
           if (!firstArrayLenVar) firstArrayLenVar = `${argName}_rows`;
         } else if (Array.isArray(value)) {
-          // 1D array
           const type = value.every(
             (v) => typeof v === "boolean" || Number.isInteger(v),
           )
@@ -587,10 +583,10 @@ ${declarations}
             .join(",");
           declarations.push(`    ${type} ${argName}[] = {${literals}};`);
           declarations.push(`    int ${argName}_len = ${value.length};`);
-          callPieces.push(`${argName}, ${argName}_len`);
+
+          argChoices.push([[argName], [argName, `${argName}_len`]]);
           if (!firstArrayLenVar) firstArrayLenVar = `${argName}_len`;
         } else {
-          // Handle scalar values
           const safeValue = value === null || value === undefined ? 0 : value;
           const type =
             typeof safeValue === "number"
@@ -599,11 +595,49 @@ ${declarations}
                 : "double"
               : "int";
           declarations.push(`    ${type} ${argName} = ${safeValue};`);
-          callPieces.push(argName);
+          argChoices.push([[argName]]);
         }
       }
 
-      const returnType = entry.returnType || "int";
+      // SMART ARITY MATCHING
+      const paramCount = (entry.params || []).length;
+      let selectedCallArgs = [];
+
+      // Try to find a combination of choices that matches paramCount
+      function findCombination(index, currentArgs) {
+        if (index === argChoices.length) {
+          return currentArgs.length === paramCount ? currentArgs : null;
+        }
+        // Try each choice for this argument
+        for (const choice of argChoices[index]) {
+          const result = findCombination(index + 1, [
+            ...currentArgs,
+            ...choice,
+          ]);
+          if (result) return result;
+        }
+        return null;
+      }
+
+      const match = findCombination(0, []);
+      if (match) {
+        selectedCallArgs = match;
+      } else {
+        // Fallback: pick the "expanded" (last) choice for each, then pad/truncate
+        selectedCallArgs = argChoices.flatMap((c) => c[c.length - 1]);
+        if (selectedCallArgs.length < paramCount) {
+          while (selectedCallArgs.length < paramCount) {
+            selectedCallArgs.push("0");
+          }
+        } else if (selectedCallArgs.length > paramCount && paramCount > 0) {
+          selectedCallArgs = selectedCallArgs.slice(0, paramCount);
+        }
+      }
+
+      const callArgs = selectedCallArgs.join(", ");
+      const returnType = (entry.returnType || "int")
+        .replace(/\b(static|inline|extern|register|constexpr)\b/g, "")
+        .trim();
       const normalizedReturn = returnType.toLowerCase().replace(/\s+/g, "");
       let printBlock = "";
 
@@ -619,6 +653,8 @@ ${declarations}
         }
         printf("]");
     }`;
+      } else if (normalizedReturn === "bool" || normalizedReturn === "_bool") {
+        printBlock = `printf("%s", __res ? "true" : "false");`;
       } else {
         printBlock = `printf("%g", (double)__res);`;
       }
@@ -633,7 +669,7 @@ ${code}
 
 int main() {
 ${declarations.join("\n")}
-    ${returnType} __res = ${entry.name}(${callPieces.join(", ")});
+    ${returnType} __res = ${entry.name}(${callArgs});
     printf("RESULT_START");
     ${printBlock}
     printf("RESULT_END");
