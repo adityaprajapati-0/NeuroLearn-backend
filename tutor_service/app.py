@@ -37,6 +37,14 @@ def call_groq(messages, max_tokens=600):
     response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"]
 
+@app.route('/', methods=['GET'])
+def root():
+    return jsonify({
+        "status": "online",
+        "service": "NeuroLearn AI Tutor",
+        "endpoints": ["/health", "/chat", "/generate-syllabus"]
+    })
+
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({"status": "healthy", "service": "tutor_service", "engine": "groq"})
