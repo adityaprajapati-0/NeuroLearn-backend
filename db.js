@@ -8,9 +8,7 @@ const { Pool } = pg;
 
 // Optimized Neon connection pool
 export const pool = new Pool({
-  connectionString:
-    process.env.DATABASE_URL ||
-    "postgresql://neondb_owner:npg_qCc04PVUAfFT@ep-purple-fire-aiwm7m9m-pooler.c-4.us-east-1.aws.neon.tech/neondb?sslmode=require",
+  connectionString: process.env.DATABASE_URL,
   // Performance optimizations
   max: 20, // Maximum connections
   min: 2, // Minimum connections to keep ready
