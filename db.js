@@ -12,13 +12,11 @@ export const pool = new Pool({
   ssl: {
     rejectUnauthorized: false,
   },
-  // Performance optimizations
-  max: 20, // Maximum connections
-  min: 2, // Minimum connections to keep ready
-  idleTimeoutMillis: 30000, // Close idle connections after 30s
-  connectionTimeoutMillis: 5000, // Fail fast on connection issues
+  max: 10, // Reduced from 20 to avoid exhausting Neon free tier connections
+  min: 3, // Keep at least 3 connections warm at all times
+  idleTimeoutMillis: 120000, // Keep connections alive for 2 minutes (longer)
+  connectionTimeoutMillis: 10000, // Wait up to 10s for a connection
   keepAlive: true,
-  keepAliveInitialDelayMillis: 10000,
 });
 
 // Connection warmup - pre-establish connections on startup
