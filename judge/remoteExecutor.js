@@ -1,4 +1,11 @@
 import fetch from "node-fetch";
+import http from "http";
+import https from "https";
+
+// Performance Optimization: Keep-alive agents for external Piston API calls
+const httpAgent = new http.Agent({ keepAlive: true });
+const httpsAgent = new https.Agent({ keepAlive: true });
+const getAgent = (url) => (url.startsWith("https") ? httpsAgent : httpAgent);
 
 /**
  * Piston API - FREE & No Card Required
@@ -685,6 +692,7 @@ ${declarations.join("\n")}
     const response = await fetch(PISTON_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      agent: getAgent(PISTON_URL),
       body: JSON.stringify({
         language: language,
         version: config.version,

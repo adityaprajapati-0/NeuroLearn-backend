@@ -1,6 +1,13 @@
 import express from "express";
 import fetch from "node-fetch";
+import http from "http";
+import https from "https";
 import { query, generateID } from "../db.js";
+
+// Keep-alive agents to speed up internal Render-to-Render communication
+const httpAgent = new http.Agent({ keepAlive: true });
+const httpsAgent = new https.Agent({ keepAlive: true });
+const getAgent = (url) => (url.startsWith("https") ? httpsAgent : httpAgent);
 
 const router = express.Router();
 
@@ -11,7 +18,8 @@ const TUTOR_SERVICE_URL =
 // Health check for tutor service
 router.get("/health", async (req, res) => {
   try {
-    const response = await fetch(`${TUTOR_SERVICE_URL}/health`);
+    const url = `${TUTOR_SERVICE_URL}/health`;
+    const response = await fetch(url, { agent: getAgent(url) });
     const data = await response.json();
     res.json({ ok: true, tutor_service: data });
   } catch (err) {
@@ -33,10 +41,12 @@ router.post("/create-syllabus", async (req, res) => {
 
   try {
     // Call Python service to generate syllabus
-    const response = await fetch(`${TUTOR_SERVICE_URL}/generate-syllabus`, {
+    const url = `${TUTOR_SERVICE_URL}/generate-syllabus`;
+    const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ topic }),
+      agent: getAgent(url),
     });
 
     const data = await response.json();
@@ -93,10 +103,12 @@ router.post("/init-session", async (req, res) => {
   }
 
   try {
-    const response = await fetch(`${TUTOR_SERVICE_URL}/init-tutor`, {
+    const url = `${TUTOR_SERVICE_URL}/init-tutor`;
+    const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sessionId, syllabus, topic }),
+      agent: getAgent(url),
     });
 
     const data = await response.json();
@@ -146,10 +158,12 @@ router.post("/chat/:sessionId", async (req, res) => {
   }
 
   try {
-    const response = await fetch(`${TUTOR_SERVICE_URL}/chat`, {
+    const url = `${TUTOR_SERVICE_URL}/chat`;
+    const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sessionId, message }),
+      agent: getAgent(url),
     });
 
     const data = await response.json();
@@ -190,9 +204,8 @@ router.get("/history/:sessionId", async (req, res) => {
   const { sessionId } = req.params;
 
   try {
-    const response = await fetch(
-      `${TUTOR_SERVICE_URL}/get-history?sessionId=${sessionId}`,
-    );
+    const url = `${TUTOR_SERVICE_URL}/get-history?sessionId=${sessionId}`;
+    const response = await fetch(url, { agent: getAgent(url) });
     const data = await response.json();
 
     if (!data.success) {

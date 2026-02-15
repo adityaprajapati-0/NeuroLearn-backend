@@ -37,6 +37,8 @@ def call_groq(messages, max_tokens=600):
     response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"]
 
+<<<<<<< HEAD
+=======
 @app.route('/', methods=['GET'])
 def root():
     return jsonify({
@@ -45,6 +47,7 @@ def root():
         "endpoints": ["/health", "/chat", "/generate-syllabus"]
     })
 
+>>>>>>> e09c8c2 (feat: complete AI Tutor source code with Groq integration)
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({"status": "healthy", "service": "tutor_service", "engine": "groq"})
