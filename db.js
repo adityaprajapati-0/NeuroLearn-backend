@@ -9,6 +9,9 @@ const { Pool } = pg;
 // Optimized Neon connection pool
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false,
+  },
   // Performance optimizations
   max: 20, // Maximum connections
   min: 2, // Minimum connections to keep ready
