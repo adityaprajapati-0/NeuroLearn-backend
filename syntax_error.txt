@@ -1,0 +1,8 @@
+D:\NeuroLearn\backend\judge\remoteExecutor.js:147
+            }
+            ^
+
+SyntaxError: Unexpected token '}'
+    at checkSyntax (node:internal/main/check_syntax:74:5)
+
+Node.js v22.15.0

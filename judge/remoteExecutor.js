@@ -1,0 +1,755 @@
+import fetch from "node-fetch";
+import http from "http";
+import https from "https";
+
+// Performance Optimization: Keep-alive agents for external Piston API calls
+const httpAgent = new http.Agent({ keepAlive: true });
+const httpsAgent = new https.Agent({ keepAlive: true });
+const getAgent = (url) => (url.startsWith("https") ? httpsAgent : httpAgent);
+
+/**
+ * Piston API - FREE & No Card Required
+ * Documentation: https://github.com/engineer-man/piston
+ */
+const PISTON_URL = "https://emkc.org/api/v2/piston/execute";
+
+const LANGUAGE_CONFIG = {
+  java: { version: "15.0.2" },
+  cpp: { version: "10.2.0" },
+  python: { version: "3.10.0" },
+  c: { version: "10.2.0" },
+  javascript: { version: "18.15.0" },
+};
+
+// ---------------- JAVA WRAPPER HELPERS ----------------
+const escapeJava = (text) =>
+  String(text)
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t");
+
+const toJavaObjectLiteral = (value) => {
+  if (value === null || value === undefined) return "null";
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return "null";
+    return Number.isInteger(value) ? String(value) : `${value}d`;
+  }
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "string") return `"${escapeJava(value)}"`;
+  if (Array.isArray(value)) {
+    return `new Object[]{${value.map((item) => toJavaObjectLiteral(item)).join(",")}}`;
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value);
+    if (entries.length === 0)
+      return "new java.util.LinkedHashMap<Object,Object>()";
+    const parts = entries.map(
+      ([k, v]) =>
+        `__Runner.mapEntry(${toJavaObjectLiteral(k)}, ${toJavaObjectLiteral(v)})`,
+    );
+    return `__Runner.mapOf(${parts.join(",")})`;
+  }
+  return "null";
+};
+
+const JAVA_RUNTIME_WRAPPER = `
+    public static void main(String[] args) {
+        try {
+            Class<?> sol = Class.forName("Solution");
+            Object[] rawArgs = __ARGS_PLACEHOLDER__;
+            java.lang.reflect.Method m = pickMethod(sol.getDeclaredMethods(), rawArgs.length);
+            m.setAccessible(true);
+            Object target = null;
+            if (!java.lang.reflect.Modifier.isStatic(m.getModifiers())) {
+                java.lang.reflect.Constructor<?> constr = sol.getDeclaredConstructor();
+                constr.setAccessible(true);
+                target = constr.newInstance();
+            }
+            Object[] finalArgs = new Object[m.getParameterCount()];
+            for(int i=0; i<finalArgs.length; i++) finalArgs[i] = convert(i<rawArgs.length ? rawArgs[i] : null, m.getParameterTypes()[i]);
+            Object res = m.invoke(target, finalArgs);
+            System.out.print("RESULT_START" + toJson(res) + "RESULT_END");
+        } catch (Throwable t) { t.printStackTrace(); System.exit(1); }
+    }
+}
+`;
+
+// ---------------- C/C++ WRAPPER HELPERS ----------------
+const detectCStyleFunction = (code, preferredName = "solve") => {
+  const regex =
+    /(?:^|\n)\s*(?:static\s+|inline\s+|extern\s+|constexpr\s+)?([A-Za-z_][\w\s:*<>,\[\]&]*?)\s+([A-Za-z_]\w*)\s*\(([^()]*)\)\s*\{/g;
+  const blacklist = new Set(["if", "for", "while", "switch", "catch"]);
+  const found = [];
+  let match;
+  while ((match = regex.exec(code)) !== null) {
+    const returnType = String(match[1] || "").trim();
+    const name = String(match[2] || "").trim();
+    const paramsText = String(match[3] || "").trim();
+
+    if (!name || blacklist.has(name) || name === "main") continue;
+    if (
+      !returnType ||
+      /^(if|for|while|switch|return|class|struct|enum|typedef|using)\b/.test(
+        returnType,
+      )
+    )
+      continue;
+
+    const params =
+      paramsText === "void" || !paramsText
+        ? []
+        : (() => {
+            const result = [];
+            let current = "";
+            let depth = 0;
+            for (let i = 0; i < paramsText.length; i++) {
+              const char = paramsText[i];
+              if (char === "<") depth++;
+              else if (char === ">") depth--;
+              if (char === "," && depth === 0) {
+                result.push(current.trim());
+                current = "";
+              } else {
+                current += char;
+              }
+            }
+            if (current.trim()) result.push(current.trim());
+            return result;
+          })().map((p) => {
+            const trimmed = p.trim();
+            const parts = trimmed.split(/\s+/);
+            const raw = parts[parts.length - 1];
+            const nameMatch = raw.match(/([A-Za-z_]\w*)$/);
+            const pName = nameMatch ? nameMatch[1] : "";
+            const pType = trimmed.replace(pName, "").trim();
+            return { type: pType, name: pName, raw: trimmed };
+          });
+
+    found.push({ name, returnType, params });
+  }
+  if (found.length === 0) return null;
+  return found.find((f) => f.name === preferredName) || found[0];
+};
+
+const normalizeCppType = (type) => {
+  return type
+    .replace(/\bconst\b/g, "")
+    .replace(/[&*]/g, "")
+    .trim();
+};
+
+const normalizeCType = (type) => {
+  return normalizeCppType(type).replace(/std::vector\s*<\s*(.*?)\s*>/g, "$1*");
+};
+
+const getCppVectorInnerType = (type) => {
+  const normalized = normalizeCppType(type);
+  const match = normalized.match(/^(?:std::)?vector\s*<\s*(.*)\s*>$/);
+  return match ? match[1].trim() : null;
+};
+
+const inferCppType = (value) => {
+  if (value === null || value === undefined) return "int";
+  if (typeof value === "boolean") return "bool";
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return "double";
+    if (Number.isInteger(value)) {
+      if (value >= -2147483648 && value <= 2147483647) return "int";
+      return "long long";
+    }
+    return "double";
+  }
+  if (typeof value === "string") return "std::string";
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "std::vector<int>";
+    const childType = inferCppType(value[0]);
+    return `std::vector<${childType}>`;
+  }
+  return "std::string";
+};
+
+const toCppValueExpr = (value, type, isTopLevel = true) => {
+  if (value === null || value === undefined) return "0";
+
+  if (Array.isArray(value)) {
+    let finalType = type ? normalizeCppType(type) : inferCppType(value);
+
+    const innerType = getCppVectorInnerType(finalType);
+    const body = value
+      .map((v) => toCppValueExpr(v, innerType || inferCppType(v), false))
+      .join(", ");
+
+    if (isTopLevel) {
+      return `${finalType}{${body}}`;
+    }
+    return `{${body}}`;
+  }
+
+  if (type === "std::string" || normalizeCppType(type || "") === "string")
+    return `std::string("${String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}")`;
+  if (type === "bool") return value ? "true" : "false";
+  if (type === "long long") return `${value}LL`;
+  if (type === "double" || type === "float") return `${value}`;
+  if (typeof value === "number") return `${value}`;
+  return "0";
+};
+
+const CPP_JSON_HELPERS = `
+string __jsonEscape(const string& s) {
+    string out; out.reserve(s.size() + 16);
+    for (char c : s) {
+        if (c == 92) { out += (char)92; out += (char)92; }
+        else if (c == 34) { out += (char)92; out += (char)34; }
+        else if (c == 10) { out += (char)92; out += 'n'; }
+        else if (c == 13) { out += (char)92; out += 'r'; }
+        else if (c == 9)  { out += (char)92; out += 't'; }
+        else out += c;
+    }
+    return out;
+}
+string __toJson(...) { return "null"; }
+string __toJson(const string& v) { return string(1, (char)34) + __jsonEscape(v) + string(1, (char)34); }
+string __toJson(const char* v) { return string(1, (char)34) + __jsonEscape(string(v ? v : "")) + string(1, (char)34); }
+string __toJson(bool v) { return v ? "true" : "false"; }
+template <typename T> typename enable_if<is_integral<T>::value && !is_same<T, bool>::value, string>::type
+__toJson(const T& v) { return to_string((long long)v); }
+template <typename T> typename enable_if<is_floating_point<T>::value, string>::type
+__toJson(const T& v) { ostringstream oss; oss << v; return oss.str(); }
+template <typename T> string __toJson(const vector<T>& v) {
+    string out = "["; for (size_t i = 0; i < v.size(); ++i) { if (i) out += ","; out += __toJson(v[i]); }
+    return out + "]";
+}
+`;
+
+/**
+ * Robustly extract the LAST valid JSON array or object from a string.
+ */
+function extractLastJson(text) {
+  if (!text) return "";
+  const startTag = "RESULT_START";
+  const endTag = "RESULT_END";
+
+  if (text.includes(startTag) && text.includes(endTag)) {
+    const start = text.lastIndexOf(startTag) + startTag.length;
+    const end = text.lastIndexOf(endTag);
+    return text.substring(start, end).trim();
+  }
+
+  const trimmed = text.trim();
+  const lastBracket = Math.max(
+    trimmed.lastIndexOf("]"),
+    trimmed.lastIndexOf("}"),
+  );
+  const firstBracket = Math.min(
+    trimmed.indexOf("[") === -1 ? Infinity : trimmed.indexOf("["),
+    trimmed.indexOf("{") === -1 ? Infinity : trimmed.indexOf("{"),
+  );
+
+  if (firstBracket !== Infinity && lastBracket > firstBracket) {
+    return trimmed.substring(firstBracket, lastBracket + 1);
+  }
+  return trimmed;
+}
+
+export async function executeRemote(code, language, input = null) {
+  const config = LANGUAGE_CONFIG[language];
+  if (!config) throw new Error(`Language ${language} not supported by Piston.`);
+
+  let finalCode = code;
+
+  // ... (rest of wrapping logic)
+
+  // Wrap Java if it doesn't have a main
+  let javaArgs = [];
+  if (language === "java") {
+    // Basic heuristics to find the likely method signature to help with object mapping
+    const javaMethodRegex =
+      /public\s+(?:static\s+)?[\w<>[\]]+\s+([A-Za-z_]\w*)\s*\(([^)]*)\)/;
+    const m = javaMethodRegex.exec(code);
+    const paramNames = m
+      ? m[2]
+          .split(",")
+          .map((p) => {
+            const parts = p.trim().split(/\s+/);
+            const raw = parts[parts.length - 1];
+            const nm = raw.match(/([A-Za-z_]\w*)$/);
+            return nm ? nm[1] : "";
+          })
+          .filter(Boolean)
+      : [];
+
+    if (Array.isArray(input)) {
+      javaArgs = input;
+    } else if (input && typeof input === "object") {
+      if (paramNames.length > 0) {
+        javaArgs = paramNames.map((n) =>
+          input[n] !== undefined ? input[n] : null,
+        );
+      } else {
+        javaArgs = [input];
+      }
+    } else if (input !== null && input !== undefined) {
+      javaArgs = [input];
+    }
+  }
+
+  const argsLiteral = Array.isArray(javaArgs)
+    ? `new Object[]{${javaArgs.map((arg) => toJavaObjectLiteral(arg)).join(",")}}`
+    : `new Object[]{${toJavaObjectLiteral(input)}}`;
+
+  // Extract imports and clean the code
+  let userImports = [];
+  let cleanCode = code.replace(/public\s+class/g, "class");
+
+  // Find all top-level imports
+  const importRegex = /^\s*import\s+[^;]+;\s*$/gm;
+  let match;
+  while ((match = importRegex.exec(cleanCode)) !== null) {
+    userImports.push(match[0].trim());
+  }
+  // Remove imports from code body
+  cleanCode = cleanCode.replace(importRegex, "");
+
+  if (!/class\s+Solution\b/.test(cleanCode)) {
+    cleanCode = `class Solution {\n${cleanCode}\n}\n`;
+  }
+
+  finalCode = `
+import java.util.*;
+import java.lang.reflect.*;
+${userImports.join("\n")}
+
+public class Main {
+    static class Pair {
+        final Object k; final Object v;
+        Pair(Object k, Object v) { this.k = k; this.v = v; }
+    }
+    static Pair mapEntry(Object k, Object v) { return new Pair(k, v); }
+    @SafeVarargs static java.util.Map<Object, Object> mapOf(Pair... pairs) {
+        java.util.Map<Object, Object> m = new java.util.LinkedHashMap<>();
+        for (Pair p : pairs) m.put(p.k, p.v);
+        return m;
+    }
+    static Method pickMethod(Method[] methods, int argc) {
+        Method best = null; int bestScore = Integer.MAX_VALUE;
+        for (Method m : methods) {
+            String name = m.getName();
+            if (name.equals("main") || name.equals("wait") || name.equals("notify") || name.equals("notifyAll") || m.isSynthetic()) continue;
+            int pc = m.getParameterCount();
+            int score = Math.abs(pc - argc);
+            if (!name.equals("solve")) score += 2;
+            if (!Modifier.isStatic(m.getModifiers())) score += 1;
+            if (score < bestScore) { bestScore = score; best = m; }
+        }
+        return best;
+    }
+    static Object convert(Object raw, Class<?> targetType) {
+        if (targetType == null) return raw;
+        if (raw == null) {
+            if (targetType.isPrimitive()) {
+                if (targetType == boolean.class) return false;
+                if (targetType == char.class) return '\0';
+                return 0;
+            }
+            return null;
+        }
+        
+        // Handle List/ArrayList
+        if (java.util.List.class.isAssignableFrom(targetType) || targetType == java.util.ArrayList.class) {
+            java.util.List<Object> list = new java.util.ArrayList<>();
+            if (raw instanceof Object[]) {
+                for (Object o : (Object[])raw) list.add(o);
+            } else {
+                list.add(raw);
+            }
+            return list;
+        }
+
+        if (targetType == String.class) return String.valueOf(raw);
+        if (targetType == int.class || targetType == Integer.class) return (raw instanceof Number) ? ((Number)raw).intValue() : 0;
+        if (targetType == long.class || targetType == Long.class) return (raw instanceof Number) ? ((Number)raw).longValue() : 0L;
+        if (targetType == double.class || targetType == Double.class) return (raw instanceof Number) ? ((Number)raw).doubleValue() : 0.0d;
+        if (targetType == float.class || targetType == Float.class) return (raw instanceof Number) ? ((Number)raw).floatValue() : 0.0f;
+        if (targetType == boolean.class || targetType == Boolean.class) return (raw instanceof Boolean) ? (Boolean)raw : false;
+        if (targetType == char.class || targetType == Character.class) return String.valueOf(raw).length() > 0 ? String.valueOf(raw).charAt(0) : '\0';
+
+        if (targetType.isArray()) {
+            Class<?> comp = targetType.getComponentType();
+            if (!(raw instanceof Object[])) {
+                Object arr = Array.newInstance(comp, 1);
+                Array.set(arr, 0, convert(raw, comp));
+                return arr;
+            }
+            Object[] src = (Object[])raw;
+            Object arr = Array.newInstance(comp, src.length);
+            for (int i=0; i<src.length; i++) Array.set(arr, i, convert(src[i], comp));
+            return arr;
+        }
+        return raw;
+    }
+    static String toJson(Object v) {
+        if (v == null) return "null";
+        if (v instanceof String) return (char)34 + v.toString().replace(String.valueOf((char)34), (char)92 + "" + (char)34) + (char)34;
+        if (v instanceof Number || v instanceof Boolean) return String.valueOf(v);
+        if (v instanceof Character) return (char)34 + v.toString() + (char)34;
+        if (v.getClass().isArray()) {
+            int n = java.lang.reflect.Array.getLength(v);
+            StringBuilder sb = new StringBuilder("[");
+            for (int i=0; i<n; i++) { if (i>0) sb.append(","); sb.append(toJson(java.lang.reflect.Array.get(v, i))); }
+            return sb.append("]").toString();
+        }
+        if (v instanceof java.util.Collection) return toJson(((java.util.Collection)v).toArray());
+        return String.valueOf(v);
+    }
+    public static void main(String[] args) {
+        try {
+            Class<?> sol = Class.forName("Solution");
+            Object[] rawArgs = ${argsLiteral};
+            Method m = pickMethod(sol.getDeclaredMethods(), rawArgs.length);
+            if (m == null) { System.err.println("No suitable method found in Solution class."); System.exit(1); }
+            m.setAccessible(true);
+            Object target = null;
+            if (!Modifier.isStatic(m.getModifiers())) {
+                Constructor<?> constr = sol.getDeclaredConstructor();
+                constr.setAccessible(true);
+                target = constr.newInstance();
+            }
+            Object[] finalArgs = new Object[m.getParameterCount()];
+            for(int i=0; i<finalArgs.length; i++) {
+                finalArgs[i] = convert(i < rawArgs.length ? rawArgs[i] : null, m.getParameterTypes()[i]);
+            }
+            Object res = m.invoke(target, finalArgs);
+            System.out.print("RESULT_START" + toJson(res) + "RESULT_END");
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            e.getCause().printStackTrace(); System.exit(1);
+        } catch (Throwable t) {
+            t.printStackTrace(); System.exit(1);
+        }
+    }
+}
+
+${cleanCode}
+`;
+
+  // Robust C++ Wrapper
+  const hasMain =
+    /(?:^|\n)\s*(int|signed|auto|void|unsigned)\s+main\s*\([^)]*\)\s*\{?/.test(
+      code,
+    );
+  if (language === "cpp" && !hasMain) {
+    const entry = detectCStyleFunction(code, "solve");
+    if (entry) {
+      // Intelligent C++ Args Selection & Object-to-Array Mapping
+      let args = [];
+      if (Array.isArray(input)) {
+        if (input.length === entry.params.length) {
+          args = input; // Perfect match
+        } else if (entry.params.length === 1) {
+          args = [input]; // Function takes 1 arg, which IS the array
+        } else {
+          args = input; // Fallback to raw array
+        }
+      } else if (input && typeof input === "object") {
+        args = entry.params.map((p) => {
+          if (input[p.name] !== undefined) return input[p.name];
+          const keys = Object.keys(input);
+          if (entry.params.length === 1 && keys.length === 1)
+            return input[keys[0]];
+          return null;
+        });
+      } else if (input !== null && input !== undefined) {
+        args = [input];
+      }
+
+      // ARITY PADDING: Ensure number of args matches signature to avoid "too few arguments"
+      if (entry && entry.params && args.length < entry.params.length) {
+        while (args.length < entry.params.length) {
+          args.push(null);
+        }
+      }
+
+      const declarations = args
+        .map((arg, i) => {
+          const inferred = inferCppType(arg);
+          let rawType = entry.params[i] ? entry.params[i].type : inferred;
+
+          // For arrays, always prefer the inferred type to ensure correct dimensionality
+          if (Array.isArray(arg) && arg.length > 0) {
+            rawType = inferred;
+          } else if (
+            inferred.includes("vector<std::vector") &&
+            !rawType.includes("vector<vector") &&
+            !rawType.includes("vector<std::vector") &&
+            (entry.params.length === 1 || !entry.params[i])
+          ) {
+            rawType = inferred;
+          }
+
+          const varType = normalizeCppType(rawType);
+          return `    ${varType} arg${i} = ${toCppValueExpr(arg, rawType)};`;
+        })
+        .join("\n");
+      const callArgs = args.map((_, i) => `arg${i}`).join(", ");
+
+      finalCode = `
+#include <iostream>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <unordered_map>
+#include <map>
+#include <set>
+#include <unordered_set>
+#include <queue>
+#include <stack>
+#include <cmath>
+#include <type_traits>
+#include <sstream>
+using namespace std;
+
+${code}
+
+${CPP_JSON_HELPERS}
+
+int main() {
+    try {
+${declarations}
+        auto result = ${entry.name}(${callArgs});
+        cout << "RESULT_START" << __toJson(result) << "RESULT_END";
+    } catch (const exception& e) {
+        cerr << e.what();
+        return 1;
+    } catch (...) {
+        return 1;
+    }
+    return 0;
+}
+`;
+    }
+  }
+
+  // Robust C Wrapper
+  if (language === "c" && !code.includes("int main")) {
+    const entry = detectCStyleFunction(code, "solve");
+    if (entry) {
+      const args = Array.isArray(input)
+        ? input
+        : [input].filter((x) => x !== null && x !== undefined);
+      const declarations = [];
+      const argChoices = []; // Each element is an array of possible call piece arrays
+      let firstArrayLenVar = null;
+
+      for (let i = 0; i < args.length; i++) {
+        const value = args[i];
+        const argName = `arg${i}`;
+
+        // Check if this is a 2D array
+        const is2D =
+          Array.isArray(value) && value.length > 0 && Array.isArray(value[0]);
+
+        if (is2D) {
+          const allInts = value.every(
+            (row) =>
+              Array.isArray(row) &&
+              row.every((v) => typeof v === "boolean" || Number.isInteger(v)),
+          );
+          const type = allInts ? "int" : "double";
+
+          value.forEach((row, rowIdx) => {
+            const rowLiterals = row
+              .map((v) => (typeof v === "boolean" ? (v ? 1 : 0) : v))
+              .join(",");
+            declarations.push(
+              `    ${type} ${argName}_row${rowIdx}[] = {${rowLiterals}};`,
+            );
+          });
+
+          const rowPtrs = value
+            .map((_, rowIdx) => `${argName}_row${rowIdx}`)
+            .join(", ");
+          declarations.push(`    ${type}* ${argName}[] = {${rowPtrs}};`);
+          declarations.push(`    int ${argName}_rows = ${value.length};`);
+          const colSize = value[0].length;
+          declarations.push(`    int ${argName}_cols = ${colSize};`);
+
+          argChoices.push([
+            [argName],
+            [argName, `${argName}_rows`, `${argName}_cols`],
+          ]);
+          if (!firstArrayLenVar) firstArrayLenVar = `${argName}_rows`;
+        } else if (Array.isArray(value)) {
+          const type = value.every(
+            (v) => typeof v === "boolean" || Number.isInteger(v),
+          )
+            ? "int"
+            : "double";
+          const literals = value
+            .map((v) => (typeof v === "boolean" ? (v ? 1 : 0) : v))
+            .join(",");
+          declarations.push(`    ${type} ${argName}[] = {${literals}};`);
+          declarations.push(`    int ${argName}_len = ${value.length};`);
+
+          argChoices.push([[argName], [argName, `${argName}_len`]]);
+          if (!firstArrayLenVar) firstArrayLenVar = `${argName}_len`;
+        } else {
+          const safeValue = value === null || value === undefined ? 0 : value;
+          const type =
+            typeof safeValue === "number"
+              ? Number.isInteger(safeValue)
+                ? "int"
+                : "double"
+              : "int";
+          declarations.push(`    ${type} ${argName} = ${safeValue};`);
+          argChoices.push([[argName]]);
+        }
+      }
+
+      // SMART ARITY MATCHING
+      const paramCount = (entry.params || []).length;
+      let selectedCallArgs = [];
+
+      // Try to find a combination of choices that matches paramCount
+      function findCombination(index, currentArgs) {
+        if (index === argChoices.length) {
+          return currentArgs.length === paramCount ? currentArgs : null;
+        }
+        // Try each choice for this argument
+        for (const choice of argChoices[index]) {
+          const result = findCombination(index + 1, [
+            ...currentArgs,
+            ...choice,
+          ]);
+          if (result) return result;
+        }
+        return null;
+      }
+
+      const match = findCombination(0, []);
+      if (match) {
+        selectedCallArgs = match;
+      } else {
+        // Fallback: pick the "expanded" (last) choice for each, then pad/truncate
+        selectedCallArgs = argChoices.flatMap((c) => c[c.length - 1]);
+        if (selectedCallArgs.length < paramCount) {
+          while (selectedCallArgs.length < paramCount) {
+            selectedCallArgs.push("0");
+          }
+        } else if (selectedCallArgs.length > paramCount && paramCount > 0) {
+          selectedCallArgs = selectedCallArgs.slice(0, paramCount);
+        }
+      }
+
+      const callArgs = selectedCallArgs.join(", ");
+      const returnType = (entry.returnType || "int")
+        .replace(/\b(static|inline|extern|register|constexpr)\b/g, "")
+        .trim();
+      const normalizedReturn = returnType.toLowerCase().replace(/\s+/g, "");
+      let printBlock = "";
+
+      if (normalizedReturn.includes("*")) {
+        const outLen = firstArrayLenVar || "2";
+        printBlock = `
+    if (__res == NULL) printf("null");
+    else {
+        printf("[");
+        for(int i=0; i<${outLen}; i++) {
+            if(i>0) printf(",");
+            printf("%g", (double)__res[i]);
+        }
+        printf("]");
+    }`;
+      } else if (normalizedReturn === "bool" || normalizedReturn === "_bool") {
+        printBlock = `printf("%s", __res ? "true" : "false");`;
+      } else {
+        printBlock = `printf("%g", (double)__res);`;
+      }
+
+      finalCode = `
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+
+${code}
+
+int main() {
+${declarations.join("\n")}
+    ${returnType} __res = ${entry.name}(${callArgs});
+    printf("RESULT_START");
+    ${printBlock}
+    printf("RESULT_END");
+    return 0;
+}
+`;
+    }
+  }
+
+  try {
+    console.log(`🚀 Executing ${language} via Piston API...`);
+
+    const response = await fetch(PISTON_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      agent: getAgent(PISTON_URL),
+      body: JSON.stringify({
+        language: language,
+        version: config.version,
+        files: [
+          {
+            name:
+              language === "java"
+                ? "Main.java"
+                : language === "cpp"
+                  ? "solution.cpp"
+                  : language === "python"
+                    ? "solution.py"
+                    : "solution",
+            content: finalCode,
+          },
+        ],
+        stdin: input
+          ? typeof input === "string"
+            ? input
+            : JSON.stringify(input)
+          : "",
+      }),
+    });
+
+    const result = await response.json();
+    console.log(
+      `[REMOTE DEBUG] Piston Result for ${language}:`,
+      JSON.stringify(result, null, 2),
+    );
+
+    if (result.message) {
+      throw new Error(result.message);
+    }
+
+    // Piston returns { run: { stdout, stderr, code, signal, output } }
+    const run = result.run;
+    const compile = result.compile;
+
+    const isSuccess = run && run.code === 0 && (!compile || compile.code === 0);
+    const combinedOutput =
+      (run ? run.stdout : "") +
+      (run ? run.stderr : "") +
+      (compile ? compile.stderr : "");
+
+    return {
+      success: isSuccess,
+      output: extractLastJson(run ? run.stdout : ""),
+      error:
+        compile && compile.code !== 0 ? compile.stderr : run ? run.stderr : "",
+      remote: true,
+      provider: "piston",
+    };
+  } catch (error) {
+    console.error("❌ Piston Execution Error:", error);
+    return {
+      success: false,
+      error: `Remote Judge Error: ${error.message}`,
+    };
+  }
+}

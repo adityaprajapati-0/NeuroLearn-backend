@@ -1,0 +1,74 @@
+﻿
+>       "content": 
+"\n#include <stdio.
+h>\n#include <stdli
+b.h>\n#include <str
+ing.h>\n#include <s
+tdbool.h>\n#include
+ <math.h>\n\n\n#inc
+lude <stdio.h>\n// 
+Signature matching 
+LeetCode: grid, 
+gridSize, 
+gridColSize\nint 
+solve(int** grid, 
+int gridSize, int* 
+gridColSize) {\n   
+ if (gridSize == 
+0) return 0;\n    
+int sum = 0;\n    
+for(int i=0; 
+i<gridSize; i++) 
+{\n        for(int 
+j=0; 
+j<gridColSize[i]; 
+j++) {\n           
+ sum += 
+grid[i][j];\n      
+  }\n    }\n    
+return 
+sum;\n}\n\n\nint 
+main() {\n\n    
+int __res = 
+solve(0, 0, 0);\n  
+  \n    printf(\"RE
+SULT_START\");\n   
+ printf(\"%g\", 
+(double)__res);\n  
+  printf(\"RESULT_E
+ND\");\n    \n    
+return 0;\n}\n"
+      }
+    ],
+    "stdin": ""
+  }
+  [REMOTE DEBUG] 
+Piston Result for 
+c: {
+    "language": 
+"c",
+    "version": 
+"10.2.0",
+    "run": {
+      "stdout": "RE
+SULT_START0RESULT_E
+ND",
+      "stderr": "",
+      "code": 0,
+      "signal": 
+null,
+      "output": "RE
+SULT_START0RESULT_E
+ND"
+    },
+    "compile": {
+      "stdout": "",
+      "stderr": "",
+      "code": 0,
+      "signal": 
+null,
+      "output": ""
+    }
+  }
+
+
